@@ -70,6 +70,11 @@ workspace or to a specific Slack user.
   cost, exports, retention, and wipes are recorded with token-shaped
   strings redacted before persistence.
 
+![A real Operant deployment in Slack — multi-thread workspace activity from real users](docs/assets/slack-real-workspace.png)
+
+*Above: a live Operant deployment (branded as @DuvoClaw inside
+[Duvo](https://duvo.ai)) running real production conversations.*
+
 ## Docs
 
 - **[Setup guide](docs/setup.md)**. Stack, dashboard sign-in, Slack

@@ -1116,7 +1116,7 @@ async function main() {
     ["project-name validation", /validateComposeProjectName/],
     ["Postgres password generation", /postgresPassword = randomToken\("operant_pg"\)/],
     ["Postgres DATABASE_URL generation", /DATABASE_URL", `postgres:\/\/operant:\$\{postgresPassword\}@postgres:5432\/operant`/],
-    ["admin login token generation", /OPERANT_ADMIN_LOGIN_TOKEN", randomToken\("operant_admin"\)/],
+    ["admin login token generation", /adminLoginToken = randomToken\("operant_admin"\)/],
     ["private env write mode", /writePrivateEnvFile[\s\S]*chmod\(file,\s*0o600\)/],
     ["argument validation self-test", /--self-test-arg-validation[\s\S]*init env argument validation self-test passed/],
     ["permission self-test", /--self-test-permissions[\s\S]*expected 600 permissions/],

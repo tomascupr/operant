@@ -30,6 +30,9 @@ plus your Slack user ID. Full walkthrough in
 
 Requirements: Node 24+, pnpm 11+, Docker Compose v2.
 
+Don't have pnpm 11 yet? Run `corepack enable` once — Node 24 ships
+with Corepack and uses the pnpm version pinned in `package.json`.
+
 ## How it works
 
 Operant pairs with [OpenClaw](https://docs.openclaw.ai), a permissively-

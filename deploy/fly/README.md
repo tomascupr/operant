@@ -1,5 +1,10 @@
 # Fly.io Deployment Design
 
+> **Preview — not GA.** This document describes the planned Fly.io
+> shape. The supported evaluation path is Docker Compose
+> (`pnpm compose:up`). Open items are tracked at the bottom of this
+> file.
+
 Fly.io is a later target. The Docker Compose path remains the primary supported
 evaluation path.
 

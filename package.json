@@ -5,6 +5,24 @@
   "description": "Self-hostable enterprise Slack AI coworker control plane for OpenClaw.",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/tomascupr/operant#readme",
+  "bugs": "https://github.com/tomascupr/operant/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tomascupr/operant.git"
+  },
+  "author": "Tomas Cupr <work@tomcupr.com>",
+  "keywords": [
+    "slack",
+    "ai",
+    "agent",
+    "openclaw",
+    "control-plane",
+    "rbac",
+    "audit",
+    "byok",
+    "pipedream"
+  ],
   "scripts": {
     "build": "pnpm --filter @operant/control-plane build && pnpm --filter @operant/openclaw-plugin build",
     "dev": "pnpm --filter @operant/control-plane dev",

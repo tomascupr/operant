@@ -43,6 +43,15 @@ Out of scope:
   respective projects; we will mirror an advisory if Operant exposes the
   defect in a non-default way.
 
+## Known transitive issues
+
+- `ws@8.20.0` — [GHSA-58qx-3vcg-4xpx](https://github.com/advisories/GHSA-58qx-3vcg-4xpx),
+  moderate. Reaches us only through OpenClaw's `@google/genai` and
+  `@mistralai/mistralai` transitive trees. Operant does not expose a
+  public WebSocket surface; impact is bounded to the OpenClaw
+  gateway's model HTTP clients. We track upstream and bump
+  `OPENCLAW_VERSION` once the fix lands. `pnpm audit --prod` is clean.
+
 ## Supported versions
 
 Operant is pre-1.0. We patch the latest tagged release. Older tags do not

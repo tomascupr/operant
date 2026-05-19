@@ -13,9 +13,7 @@ GitHub, Linear, HubSpot. The bot calls those tools under that human's
 connection, and every session, policy decision, and tool call names the
 person who triggered it.
 
-<!-- TODO: replace with a real screenshot/GIF of localhost:8080 Setup tab.
-![Operant dashboard](docs/assets/dashboard.png)
--->
+![Operant dashboard — Setup tab at first load](docs/assets/dashboard.png)
 
 ## Quickstart
 
@@ -80,9 +78,12 @@ workspace or to a specific Slack user.
   human-post mode, strict gates.
 - **[Slack app setup](deploy/slack/README.md)**. Manifest, scopes,
   Socket Mode, token helpers.
+- **[HTTP API reference](docs/api.md)**. Dashboard and internal
+  endpoints.
 - **[Contributing](CONTRIBUTING.md)**. Local dev, PR expectations,
   release flow.
 - **[Security policy](SECURITY.md)**. Reporting a vulnerability.
+- **[Changelog](CHANGELOG.md)**. Release notes and version history.
 
 ## License
 

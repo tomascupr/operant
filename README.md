@@ -3,33 +3,21 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![verify](https://github.com/tomascupr/operant/actions/workflows/verify.yml/badge.svg)](https://github.com/tomascupr/operant/actions/workflows/verify.yml)
 [![Node 24](https://img.shields.io/badge/node-24%2B-brightgreen)](package.json)
-[![pnpm 11](https://img.shields.io/badge/pnpm-11%2B-f69220)](package.json)
 
-**Slack AI that keeps employee credentials in your Postgres, not a vendor's.**
+**Self-hostable Slack AI with per-user OAuth and per-human audit.**
 
-<!-- TODO before launch: replace with a real screenshot or GIF of the dashboard.
-     Suggested capture: localhost:8080 Setup tab after first credential save,
-     showing Slack/model SecretRef state and "Ready to run Slack acceptance".
+Hosted Slack agents share one bot identity across your whole company.
+Every employee's actions land in the audit log under "the workspace did
+it." Operant doesn't. Each Slack user OAuths their own Gmail, Notion,
+GitHub, Linear, HubSpot. The bot calls those tools under that human's
+connection, and every session, policy decision, and tool call names the
+person who triggered it.
+
+<!-- TODO: replace with a real screenshot/GIF of localhost:8080 Setup tab.
 ![Operant dashboard](docs/assets/dashboard.png)
 -->
 
-
-Operant is an MIT-licensed control plane that lets your team mention or DM a
-Slack bot to delegate work (send email, open PRs, run reports, schedule tasks)
-under each employee's own OAuth tokens, with per-user policy, approval gates,
-and a full audit trail. Everything runs inside your trust boundary; secrets
-are AES-256-GCM-encrypted in Postgres and never leave the control plane.
-
-### What's OpenClaw?
-
-[OpenClaw](https://docs.openclaw.ai) is a permissively-licensed agent runtime
-that handles Slack ingress (Socket Mode), agent sessions, the browser /
-cloud-computer, tool execution, scheduled tasks, and approval UI. Operant
-pairs with it: OpenClaw is the engine that talks to Slack and runs the agent,
-Operant is the enterprise control plane wrapped around it (BYOK credentials,
-RBAC, approval policy, audit, retention, usage tracking, admin dashboard).
-
-### Get it running
+## Quickstart
 
 ```bash
 pnpm install
@@ -38,102 +26,63 @@ pnpm compose:up -- -d
 open http://localhost:8080
 ```
 
-Sign in with the `OPERANT_ADMIN_LOGIN_TOKEN` from your generated `.env` plus
-your Slack user ID. Full walkthrough in **[docs/setup.md](docs/setup.md)**.
+Sign in with the `OPERANT_ADMIN_LOGIN_TOKEN` from your generated `.env`
+plus your Slack user ID. Full walkthrough in
+**[docs/setup.md](docs/setup.md)**.
 
-## What's different about self-hosting
+Requirements: Node 24+, pnpm 11+, Docker Compose v2.
 
-Slack AI coworkers are easy to demo and hard to trust in production. Hosted
-versions store every employee's OAuth tokens in their cloud, ship one shared
-admin/non-admin permission model, and pin every audit row to the workspace
-instead of the human who actually triggered the action. Operant is for teams
-that want the Slack-native experience without that trade.
+## How it works
 
-- **Per-user credentials, not shared service accounts.** Alice's Gmail token
-  and Bob's Gmail token live as separate AES-256-GCM rows in your Postgres,
-  resolved per call and audited under the right human.
-- **2,500+ SaaS tools, zero per-app code.** The optional
-  [Operant OpenClaw plugin](apps/openclaw-plugin) bridges to Pipedream
-  Connect, so each Slack user OAuths their own Gmail / Notion / HubSpot /
-  Linear / GitHub account via a one-time connect link. The bot calls
-  `pipedream_list_actions` and `pipedream_run_action` under that user's
-  identity, gated by your Operant policy.
-- **Real RBAC, not admin/non-admin.** Six built-in roles plus arbitrary
-  custom `(action, resource)` permission pairs, with channel allowlists,
-  per-Slack-user and per-role tool entitlements, and named-approver policies
-  for risky actions.
-- **One Compose project per workspace.** Postgres, Redis, OpenClaw state, and
-  the generated config volume are scoped by project name so secrets never
-  cross a trust boundary. Ports bind to `127.0.0.1` by default.
-- **Auditable end to end.** Sessions, jobs, policy decisions, credential
-  resolutions, usage/cost, exports, and wipes are recorded with token-shaped
-  strings redacted before persistence.
+Operant pairs with [OpenClaw](https://docs.openclaw.ai), a permissively-
+licensed agent runtime that owns Slack Socket Mode, agent sessions, the
+browser / cloud-computer, and tool execution. Operant adds the
+enterprise control plane around it: BYOK credentials, RBAC, policy,
+approvals, audit, retention, usage tracking, and the admin dashboard.
 
-## Architecture
-
-One Operant deployment is one company, workspace, or trust boundary:
-
-```text
-Slack users
-  -> OpenClaw Slack Socket Mode gateway
-  -> OpenClaw runtime, tools, approvals, tasks, and thread replies
-  -> Operant policy/audit control plane
-  -> Postgres enterprise state
-
-Operant dashboard
-  -> encrypted Slack/model/tool credentials
-  -> SecretRef-backed OpenClaw config
+```
+Slack ──> OpenClaw gateway ──> Operant policy + audit ──> Postgres
+                            └─> Pipedream Connect (per-user OAuth)
 ```
 
-- `postgres`: canonical state, audit logs, encrypted credentials, policies,
-  approvals, sessions, jobs, usage, exports, wipes.
-- `policy-audit`: the Operant control-plane API and static admin dashboard.
-- `openclaw-gateway`: the OpenClaw runtime with Slack Socket Mode,
-  SecretRefs, agent sessions, usage, approvals, cron, tasks, skills,
-  plugins, tools.
-- `redis`: optional private queue profile for future async export/wipe
-  workers.
+Slack app tokens, bot tokens, and model API keys live AES-256-GCM
+encrypted in your Postgres. Per-user tool OAuth (Gmail / Notion / GitHub
+/ ...) is held by [Pipedream Connect](https://pipedream.com/docs/connect)
+under each Slack user's external ID. Custom non-Pipedream tool
+credentials can also be stored encrypted in your Postgres, scoped to the
+workspace or to a specific Slack user.
 
-Operant writes SecretRef-backed OpenClaw config. Plaintext secrets stay
-encrypted in Postgres and are resolved at runtime through the internal
-SecretRef resolver. Base Compose keeps Docker sandboxing off; the dedicated
-`docker-compose.sandbox.yml` overlay opts into Docker-backed OpenClaw
-sandboxing for single-trust-boundary hosts.
+## What you get
 
-## Documentation
+- Per-user OAuth across 2,500+ SaaS tools via the optional Operant
+  OpenClaw plugin and Pipedream Connect. First call per app posts a
+  Pipedream connect link in Slack; subsequent calls run under that human.
+- Six built-in roles (`owner`, `admin`, `integration_admin`,
+  `billing_usage_admin`, `member`, `viewer`) plus arbitrary custom
+  `(action, resource)` permissions. Channel allowlists, per-Slack-user
+  and per-role tool entitlements, named-approver policies for risky
+  actions.
+- Static same-origin admin dashboard: Setup, Health, Policy, People,
+  Approvals, Activity, Usage, Data, OpenClaw operator views. No bundler,
+  no external scripts, strict CSP.
+- One Postgres for state, optional Redis profile, Docker Compose
+  topology with localhost-bound host ports and a per-workspace trust
+  boundary. Helm chart and Fly artifacts ship for graduation.
+- Sessions, jobs, policy decisions, credential resolutions, usage and
+  cost, exports, retention, and wipes are recorded with token-shaped
+  strings redacted before persistence.
 
-- **[Setup guide](docs/setup.md)**. The everyday operator path (stack,
-  dashboard sign-in, Slack app, Pipedream Connect, integration credentials,
-  sandbox overlay).
-- **[Acceptance guide](docs/acceptance.md)**. Live verifiers, manual human
-  post mode, strict gates, completion audit.
-- **[Slack app setup](deploy/slack/README.md)**. Manifest, scopes, Socket
-  Mode, token-generation helpers.
+## Docs
 
-## Glossary
-
-- **Operant**. This control plane (HTTP API, dashboard, Postgres state,
-  RBAC, policy, audit).
-- **OpenClaw**. The upstream agent runtime that owns Slack ingress, agent
-  sessions, and tool execution. See <https://docs.openclaw.ai>.
-- **`policy-audit`**. The Operant control-plane container in
-  `docker-compose.yml`.
-- **`openclaw-gateway`**. The OpenClaw runtime container.
-- **SecretRef**. Opaque ID referencing an encrypted secret in Operant
-  Postgres. OpenClaw resolves it at call time via the internal resolver
-  rather than reading plaintext from disk.
-- **BYOK**. Bring your own keys; Slack app token, bot token, model API
-  key, and tool credentials all live in your Postgres.
-- **Trust boundary**. One Compose project. Do not share Postgres volumes,
-  OpenClaw state, or credentials between unrelated workspaces.
-
-## Good First Areas
-
-- Package a polished Helm release flow around the current chart skeleton.
-- Add managed-upgrade playbooks for long-lived customer deployments.
-- Build SSO/SAML/OIDC and SCIM adapters against the existing RBAC/session
-  boundary.
-- Extend compliance exports without exposing encrypted credential values.
+- **[Setup guide](docs/setup.md)**. Stack, dashboard sign-in, Slack
+  app, Pipedream Connect, integration credentials, sandbox overlay.
+- **[Acceptance guide](docs/acceptance.md)**. Live verifiers, manual
+  human-post mode, strict gates.
+- **[Slack app setup](deploy/slack/README.md)**. Manifest, scopes,
+  Socket Mode, token helpers.
+- **[Contributing](CONTRIBUTING.md)**. Local dev, PR expectations,
+  release flow.
+- **[Security policy](SECURITY.md)**. Reporting a vulnerability.
 
 ## License
 

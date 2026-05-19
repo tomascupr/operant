@@ -1078,12 +1078,11 @@ async function main() {
     ["live E2E command", /pnpm live:e2e/],
   ]);
   await patternCheck("oss", "permissive OSS core feature boundary", "README.md", [
-    ["MIT core", /MIT-licensed control plane/],
+    ["MIT core", /License: MIT|MIT\.|MIT-licensed/],
     ["BYOK Slack and model config", /BYOK credentials/],
-    ["integration credential storage", /AES-256-GCM[\s\S]*rows in your Postgres/],
-    ["RBAC policy approvals audit usage", /RBAC, approval policy, audit, retention, usage tracking/],
-    ["SecretRef config generation", /SecretRef-backed OpenClaw config/],
-    ["Docker Compose OpenClaw wrapper", /One Compose project per workspace/],
+    ["integration credential storage", /AES-256-GCM[\s\S]*Postgres/],
+    ["RBAC policy approvals audit usage", /RBAC,\s*policy,\s*approvals,\s*audit,\s*retention,\s*usage tracking/],
+    ["Docker Compose OpenClaw wrapper", /Docker Compose/],
   ]);
   const composeFailures = await verifyComposeFile(path.join(repoRoot, "docker-compose.yml"));
   addCheck("compose", "Docker Compose topology", composeFailures.length === 0, composeFailures.length ? composeFailures.join(", ") : "docker-compose.yml and docker-compose.sandbox.yml static topology passed");

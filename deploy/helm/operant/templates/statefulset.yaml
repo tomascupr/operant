@@ -1,0 +1,170 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "operant.fullname" . }}
+  labels:
+    {{- include "operant.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ include "operant.fullname" . }}-headless
+  selector:
+    matchLabels:
+      {{- include "operant.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "operant.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: control-plane
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: control-plane
+              containerPort: {{ .Values.controlPlane.port }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "operant.secretName" .) .Values.database.existingSecret.name }}
+                  key: {{ .Values.database.existingSecret.key }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "operant.secretName" .) .Values.redis.existingSecret.name }}
+                  key: {{ .Values.redis.existingSecret.key }}
+                  optional: true
+            - name: OPERANT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "operant.secretName" . }}
+                  key: OPERANT_SECRET_KEY
+            - name: OPERANT_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "operant.secretName" . }}
+                  key: OPERANT_INTERNAL_TOKEN
+            - name: OPERANT_ADMIN_LOGIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "operant.secretName" . }}
+                  key: OPERANT_ADMIN_LOGIN_TOKEN
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "operant.secretName" . }}
+                  key: OPENCLAW_GATEWAY_TOKEN
+            - name: OPERANT_HOST
+              value: "0.0.0.0"
+            - name: OPERANT_PORT
+              value: {{ .Values.controlPlane.port | quote }}
+            - name: OPERANT_DEFAULT_COMPANY_NAME
+              value: {{ .Values.workspace.companyName | quote }}
+            - name: OPERANT_DEFAULT_WORKSPACE_NAME
+              value: {{ .Values.workspace.name | quote }}
+            - name: OPENCLAW_GATEWAY_URL
+              value: "http://127.0.0.1:{{ .Values.openclaw.port }}"
+            - name: OPENCLAW_CONFIG_PATH
+              value: /operant/openclaw/openclaw.json
+            - name: OPENCLAW_STATE_DIR
+              value: /home/node/.openclaw-client
+            - name: OPENCLAW_SECRET_RESOLVER_COMMAND
+              value: /operant/openclaw/operant-secret-resolver
+            - name: OPENCLAW_SECRET_RESOLVER_SCRIPT
+              value: /operant/openclaw/operant-secret-resolver.mjs
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: control-plane
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: control-plane
+          volumeMounts:
+            - name: openclaw-config
+              mountPath: /operant/openclaw
+            - name: resolver
+              mountPath: /operant/openclaw/operant-secret-resolver.mjs
+              subPath: operant-secret-resolver.mjs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+        - name: openclaw-gateway
+          image: "{{ .Values.openclaw.image.repository }}:{{ .Values.openclaw.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command:
+            - sh
+            - -lc
+          args:
+            - |
+              mkdir -p /home/node/.openclaw/agents/main/sessions
+              exec openclaw gateway run --allow-unconfigured --port {{ .Values.openclaw.port | quote }} --bind lan --auth token
+          ports:
+            - name: openclaw
+              containerPort: {{ .Values.openclaw.port }}
+          env:
+            - name: OPENCLAW_CONFIG_PATH
+              value: /operant/openclaw/openclaw.json
+            - name: OPENCLAW_STATE_DIR
+              value: /home/node/.openclaw
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "operant.secretName" . }}
+                  key: OPENCLAW_GATEWAY_TOKEN
+            - name: OPERANT_CONTROL_PLANE_URL
+              value: "http://127.0.0.1:{{ .Values.controlPlane.port }}"
+            - name: OPERANT_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "operant.secretName" . }}
+                  key: OPERANT_INTERNAL_TOKEN
+          volumeMounts:
+            - name: openclaw-state
+              mountPath: /home/node/.openclaw
+            - name: openclaw-config
+              mountPath: /operant/openclaw
+            - name: resolver
+              mountPath: /operant/openclaw/operant-secret-resolver.mjs
+              subPath: operant-secret-resolver.mjs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.openclaw.resources | nindent 12 }}
+      volumes:
+        - name: resolver
+          configMap:
+            name: {{ include "operant.fullname" . }}-resolver
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: openclaw-state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.storage.className }}
+        storageClassName: {{ .Values.storage.className | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.openclawStateSize }}
+    - metadata:
+        name: openclaw-config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.storage.className }}
+        storageClassName: {{ .Values.storage.className | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.openclawConfigSize }}

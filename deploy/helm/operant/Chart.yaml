@@ -1,0 +1,6 @@
+apiVersion: v2
+name: operant
+description: Self-hostable enterprise Slack AI coworker control plane for OpenClaw.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

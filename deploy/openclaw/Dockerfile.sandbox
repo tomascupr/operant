@@ -1,0 +1,28 @@
+ARG OPENCLAW_VERSION=2026.5.18
+ARG DOCKER_CLI_VERSION=29.4.3
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
+
+ARG OPENCLAW_VERSION=2026.5.18
+ARG DOCKER_CLI_VERSION=29.4.3
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && arch="$(dpkg --print-architecture)" \
+  && case "$arch" in \
+    amd64) docker_arch="x86_64" ;; \
+    arm64) docker_arch="aarch64" ;; \
+    *) echo "unsupported Docker CLI architecture: $arch" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz \
+  && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
+  && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+  && rm -rf /tmp/docker /tmp/docker.tgz /var/lib/apt/lists/*
+
+RUN mkdir -p /usr/local/share/operant/openclaw/plugins \
+  && chown -R node:node /usr/local/share/operant/openclaw
+COPY deploy/openclaw/ensure-slack-plugin.sh /usr/local/bin/operant-ensure-slack-plugin
+RUN chmod 0755 /usr/local/bin/operant-ensure-slack-plugin
+COPY deploy/openclaw/Dockerfile.sandbox-runtime /usr/local/share/operant/openclaw/Dockerfile.sandbox-runtime
+
+USER node
+RUN npm pack --pack-destination /usr/local/share/operant/openclaw/plugins @openclaw/slack@${OPENCLAW_VERSION}

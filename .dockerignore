@@ -1,0 +1,17 @@
+.git
+.gitignore
+.DS_Store
+
+# Local secrets and generated evidence must never be sent to the Docker daemon.
+.env
+.env.*
+!.env.example
+.operant
+
+# Local dependency/build outputs are rebuilt inside the image.
+node_modules
+**/node_modules
+apps/*/dist
+apps/control-plane/.turbo
+coverage
+*.log

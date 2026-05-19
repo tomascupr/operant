@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Slack">
+  <rect width="64" height="64" rx="12" fill="#fff"/>
+  <rect x="27" y="8" width="10" height="24" rx="5" fill="#36c5f0"/>
+  <rect x="8" y="27" width="24" height="10" rx="5" fill="#2eb67d"/>
+  <rect x="27" y="32" width="10" height="24" rx="5" fill="#ecb22e"/>
+  <rect x="32" y="27" width="24" height="10" rx="5" fill="#e01e5a"/>
+  <circle cx="32" cy="32" r="5" fill="#17202a"/>
+</svg>

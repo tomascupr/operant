@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Google Sheets">
+  <rect width="64" height="64" rx="12" fill="#e6f4ea"/>
+  <path d="M18 10h21l9 9v35H18z" fill="#34a853"/>
+  <path d="M39 10v10h9z" fill="#a8dab5"/>
+  <path d="M24 28h18M24 36h18M24 44h18M30 24v24M36 24v24" stroke="#fff" stroke-width="3"/>
+</svg>

@@ -1,0 +1,24 @@
+ARG OPENCLAW_VERSION=2026.5.18
+
+FROM node:24-alpine AS plugin-build
+WORKDIR /build
+RUN corepack enable
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/openclaw-plugin/package.json apps/openclaw-plugin/package.json
+RUN pnpm install --filter @operant/openclaw-plugin --frozen-lockfile
+COPY apps/openclaw-plugin apps/openclaw-plugin
+RUN pnpm --filter @operant/openclaw-plugin build
+RUN mkdir -p /build/packed && cd apps/openclaw-plugin && npm pack --pack-destination /build/packed
+
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
+
+ARG OPENCLAW_VERSION=2026.5.18
+USER root
+RUN mkdir -p /usr/local/share/operant/openclaw/plugins \
+  && chown -R node:node /usr/local/share/operant/openclaw
+COPY deploy/openclaw/ensure-slack-plugin.sh /usr/local/bin/operant-ensure-slack-plugin
+RUN chmod 0755 /usr/local/bin/operant-ensure-slack-plugin
+COPY --from=plugin-build --chown=node:node /build/packed/*.tgz /usr/local/share/operant/openclaw/plugins/
+
+USER node
+RUN npm pack --pack-destination /usr/local/share/operant/openclaw/plugins @openclaw/slack@${OPENCLAW_VERSION}

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "operant.fullname" . }}-resolver
+  labels:
+    {{- include "operant.labels" . | nindent 4 }}
+data:
+  operant-secret-resolver.mjs: |-
+{{ .Files.Get "files/operant-secret-resolver.mjs" | indent 4 }}

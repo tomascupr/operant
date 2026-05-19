@@ -1,0 +1,20 @@
+{
+  "id": "operant",
+  "name": "Operant",
+  "description": "Operant control-plane bridge: per-user policy, RBAC, and integration credentials for OpenClaw tools.",
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "tools": [
+      "operant_ping",
+      "pipedream_list_actions",
+      "pipedream_run_action"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

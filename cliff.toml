@@ -1,0 +1,54 @@
+# git-cliff configuration. https://git-cliff.org
+
+[changelog]
+header = """# Changelog
+
+All notable changes to Operant are documented here.
+Format inspired by [Keep a Changelog](https://keepachangelog.com).
+
+"""
+body = """
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## Unreleased
+{% endif -%}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits -%}
+- {{ commit.message | split(pat="\n") | first | trim }}{% if commit.id %} ({{ commit.id | truncate(length=7, end="") }}){% endif %}
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "Chore" },
+  { message = "^build", group = "Build" },
+  { message = "^ci", group = "CI" },
+  { message = "^Restructure|^Restructured|^Rework|^Refactor", group = "Changed" },
+  { message = "^Add|^Added|^Implement|^Introduce", group = "Added" },
+  { message = "^Fix|^Fixed|^Resolve|^Repair|^Patch|^Correct", group = "Fixed" },
+  { message = "^Remove|^Removed|^Drop|^Delete", group = "Removed" },
+  { message = "^Document|^Documented|^Update docs", group = "Documentation" },
+  { message = "^Harden|^Tighten|^Sanitize|^Secure", group = "Security" },
+  { message = "^Parse|^Send|^Force|^Move|^Always", group = "Changed" },
+  { body = ".*", group = "Other" },
+]
+filter_commits = false
+tag_pattern = "v[0-9]*"
+ignore_tags = ""
+sort_commits = "oldest"

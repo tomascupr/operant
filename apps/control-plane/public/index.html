@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Operant Control Plane</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="product-mark" aria-hidden="true">O</div>
+        <div>
+          <h1>Operant</h1>
+          <p id="workspace">Loading workspace...</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="readiness-state" class="status-pill pending">Setup pending</span>
+        <span id="session-state">Not signed in</span>
+        <button id="refresh" type="button" class="secondary-button">Refresh</button>
+        <button id="logout" type="button" class="ghost-button">Sign Out</button>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Dashboard sections">
+        <nav class="nav-tabs">
+          <button type="button" class="nav-tab active" data-view-target="setup-view">Setup</button>
+          <button type="button" class="nav-tab" data-view-target="health-view">Health</button>
+          <button type="button" class="nav-tab" data-view-target="policy-view">Policy</button>
+          <button type="button" class="nav-tab" data-view-target="people-view">People</button>
+          <button type="button" class="nav-tab" data-view-target="approvals-view">Approvals</button>
+          <button type="button" class="nav-tab" data-view-target="activity-view">Activity</button>
+          <button type="button" class="nav-tab" data-view-target="usage-view">Usage</button>
+          <button type="button" class="nav-tab" data-view-target="data-view">Data</button>
+          <button type="button" class="nav-tab" data-view-target="openclaw-view">OpenClaw</button>
+        </nav>
+      </aside>
+
+      <main class="layout">
+        <section id="setup-view" class="view active" aria-labelledby="setup-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="setup-title">Setup</h2>
+              <p>Bring a workspace to the point where Slack acceptance can run safely.</p>
+            </div>
+            <div id="setup-progress" class="progress-summary">0 of 6 complete</div>
+          </div>
+
+          <section class="panel">
+            <div id="setup-checklist" class="checklist"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Admin Session</h3>
+                <p>Use the generated admin login token to create or resume an operator session.</p>
+              </div>
+            </div>
+            <form id="login-form" class="inline-form compact-form">
+              <label>
+                Slack user ID
+                <input name="slackUserId" placeholder="U12345678" required autocomplete="off" />
+              </label>
+              <label>
+                Admin login token
+                <input name="adminLoginToken" type="password" placeholder="operant_admin_..." required autocomplete="off" />
+              </label>
+              <button type="submit">Sign In</button>
+            </form>
+            <div id="login-result" class="result-surface" role="status"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Credential Setup</h3>
+                <p>Secret values are encrypted in Postgres and emitted to OpenClaw only as SecretRefs.</p>
+              </div>
+              <span class="status-pill" id="credential-validation-state">Waiting</span>
+            </div>
+            <form id="credentials-form" class="form-grid">
+              <label>
+                Company
+                <input name="companyName" autocomplete="organization" placeholder="Acme Inc." />
+                <small>Shown in the dashboard header and reports.</small>
+              </label>
+              <label>
+                Workspace
+                <input name="workspaceName" placeholder="Acme Slack" />
+                <small>One deployment should map to one trust boundary.</small>
+              </label>
+              <label>
+                Admin Slack user ID
+                <input name="adminSlackUserId" placeholder="U12345678" />
+                <small>Required on first setup; kept as owner and approver.</small>
+              </label>
+              <label>
+                Admin login token
+                <input name="adminLoginToken" type="password" autocomplete="off" placeholder="Required before owner setup" />
+                <small>Use the generated token from the env file.</small>
+              </label>
+              <label>
+                Slack bot token
+                <input name="slackBotToken" type="password" placeholder="xoxb-... or blank to keep current" autocomplete="off" />
+                <small class="saved-indicator" data-saved-for="slack/botToken"></small>
+              </label>
+              <label>
+                Slack app token
+                <input name="slackAppToken" type="password" placeholder="xapp-... or blank to keep current" autocomplete="off" />
+                <small class="saved-indicator" data-saved-for="slack/appToken"></small>
+              </label>
+              <label>
+                Model provider
+                <select name="modelProvider" required>
+                  <option value="openai" selected>OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+                <small>Used to pick the model SecretRef path and OpenClaw provider.</small>
+              </label>
+              <label>
+                Model name
+                <input name="modelName" value="gpt-5" required />
+                <small>Stored as settings, not as secret material.</small>
+              </label>
+              <label>
+                Model API key
+                <input name="modelApiKey" type="password" placeholder="sk-... or blank to keep current" autocomplete="off" />
+                <small class="saved-indicator" data-saved-for-prefix="models/"></small>
+              </label>
+              <label>
+                Allowed DM users
+                <input name="allowedDmUserIds" placeholder="U12345678, U23456789" />
+                <small>Slack users who may DM Operant.</small>
+              </label>
+              <label>
+                Allowed channels
+                <input name="allowedChannelIds" placeholder="C12345678, C23456789" />
+                <small>Channels where OpenClaw should listen for mentions.</small>
+              </label>
+              <label>
+                Approval users
+                <input name="approvalSlackUserIds" placeholder="U12345678" />
+                <small>Approvers for the default risky exec policy.</small>
+              </label>
+              <div class="form-actions">
+                <button type="submit">Save And Generate Config</button>
+              </div>
+            </form>
+          </section>
+        </section>
+
+        <section id="health-view" class="view" aria-labelledby="health-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="health-title">Health</h2>
+              <p>Workspace readiness, integration diagnostics, and operational counts.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <div class="metrics">
+              <div><span id="credentials">0</span><small>Credentials</small></div>
+              <div><span id="channels">0</span><small>Channels</small></div>
+              <div><span id="sessions">0</span><small>Sessions</small></div>
+              <div><span id="usage">0</span><small>Usage Events</small></div>
+              <div><span id="approvals">0</span><small>Pending Approvals</small></div>
+              <div><span id="audit">0</span><small>Audit Events</small></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Pipedream Diagnostics</h3>
+                <p>Environment, plugin, OAuth, and latest invocation status.</p>
+              </div>
+            </div>
+            <div id="pipedream-diagnostics" class="diagnostic-panel">Sign in to view Pipedream diagnostics.</div>
+          </section>
+        </section>
+
+        <section id="policy-view" class="view" aria-labelledby="policy-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="policy-title">Policy</h2>
+              <p>Structured controls for common policy updates, with raw JSON available for exact edits.</p>
+            </div>
+            <div class="actions">
+              <button id="load-policy" type="button" class="secondary-button">Load Policy</button>
+              <button id="save-policy" type="button">Save Policy JSON</button>
+            </div>
+          </div>
+
+          <section class="panel">
+            <h3>Pipedream Apps</h3>
+            <div id="pipedream-apps-grid" class="pipedream-grid">Sign in to manage Pipedream policies.</div>
+          </section>
+
+          <section class="panel">
+            <h3>Structured Policy Editor</h3>
+            <div id="policy-structured" class="policy-structured"></div>
+            <div class="editor-grid">
+              <form id="policy-channel-form" class="compact-form">
+                <h4>Channel Rule</h4>
+                <label>Channel ID<input name="channelId" placeholder="C12345678" required /></label>
+                <label>Name<input name="name" placeholder="Support escalation" /></label>
+                <label class="toggle-row"><input name="enabled" type="checkbox" checked /> Enabled</label>
+                <label class="toggle-row"><input name="requireMention" type="checkbox" checked /> Require mention</label>
+                <label>Allowed users<input name="allowedUserIds" placeholder="U123, U456" /></label>
+                <label>Denied users<input name="deniedUserIds" placeholder="U999" /></label>
+                <button type="submit">Save Channel Rule</button>
+              </form>
+              <form id="policy-tool-form" class="compact-form">
+                <h4>Tool Rule</h4>
+                <label>Tool<input name="tool" placeholder="exec or pipedream:gmail" required /></label>
+                <label>Action<input name="action" placeholder="*" value="*" required /></label>
+                <label>Effect
+                  <select name="effect">
+                    <option value="allow">Allow</option>
+                    <option value="approval_required">Approval Required</option>
+                    <option value="deny">Deny</option>
+                  </select>
+                </label>
+                <label>Scoped Slack users<input name="slackUserIds" placeholder="U123, U456" /></label>
+                <label>Scoped roles<input name="roleNames" placeholder="admin, integration_admin" /></label>
+                <button type="submit">Save Tool Rule</button>
+              </form>
+              <form id="policy-approval-rule-form" class="compact-form">
+                <h4>Approval Rule</h4>
+                <label>Name<input name="name" placeholder="risky-actions" required /></label>
+                <label>Action pattern<input name="actionPattern" placeholder="exec:*" required /></label>
+                <label>Resource pattern<input name="resourcePattern" value="*" required /></label>
+                <label>Approver Slack IDs<input name="approverSlackUserIds" placeholder="U12345678" required /></label>
+                <label>Minimum approvals<input name="minApprovals" type="number" min="1" value="1" /></label>
+                <label class="toggle-row"><input name="enabled" type="checkbox" checked /> Enabled</label>
+                <button type="submit">Save Approval Rule</button>
+              </form>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h3 id="policy-preview-section">Policy Preview</h3>
+            <textarea id="policy-editor" spellcheck="false" aria-label="Policy JSON"></textarea>
+            <div id="policy-filtered-rows" class="result-surface">No app policy filter selected.</div>
+            <form id="policy-form" class="inline-form compact-form">
+              <label>Slack user ID<input name="slackUserId" placeholder="Slack user ID" required /></label>
+              <label>Channel ID<input name="slackChannelId" placeholder="Channel ID" /></label>
+              <label>Chat type
+                <select name="chatType">
+                  <option value="direct">DM</option>
+                  <option value="channel">Channel</option>
+                  <option value="group">Group</option>
+                  <option value="thread">Thread</option>
+                </select>
+              </label>
+              <label>Tool<input name="tool" placeholder="Tool, optional" /></label>
+              <label>Action<input name="action" value="message" placeholder="Action" /></label>
+              <label>Resource<input name="resource" value="slack" placeholder="Resource" /></label>
+              <button type="submit">Evaluate</button>
+            </form>
+            <div id="policy-result" class="result-surface"></div>
+          </section>
+        </section>
+
+        <section id="people-view" class="view" aria-labelledby="people-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="people-title">People</h2>
+              <p>Manage users, role assignments, and custom permission bundles.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <h3>User Access</h3>
+            <form id="user-form" class="form-grid">
+              <label>Slack user ID<input name="slackUserId" placeholder="U23456789" required /></label>
+              <label>Name<input name="name" placeholder="Jane Admin" /></label>
+              <label>Email<input name="email" type="email" placeholder="jane@example.com" /></label>
+              <label>Roles
+                <select name="roles" id="user-roles-select" multiple required size="5"></select>
+                <small>Hold Command or Ctrl to select multiple.</small>
+              </label>
+              <div class="form-actions">
+                <button type="submit">Save User Roles</button>
+              </div>
+            </form>
+            <div id="users-result" class="table-surface">Sign in to manage users.</div>
+          </section>
+          <section class="panel">
+            <h3>Custom Roles</h3>
+            <form id="role-form" class="form-grid">
+              <label>Role name<input name="name" placeholder="usage_analyst" required /></label>
+              <label class="wide-field">Permissions
+                <textarea name="permissions" placeholder="usage:read usage&#10;settings:read workspace" required></textarea>
+                <small>One action/resource pair per line.</small>
+              </label>
+              <div class="form-actions">
+                <button type="submit">Save Role</button>
+              </div>
+            </form>
+            <div id="roles-result" class="table-surface">Sign in to manage roles.</div>
+          </section>
+        </section>
+
+        <section id="approvals-view" class="view" aria-labelledby="approvals-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="approvals-title">Approvals</h2>
+              <p>Create, inspect, and decide approval-gated work with audit-friendly summaries.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <h3>Approval Request</h3>
+            <form id="approval-form" class="inline-form compact-form">
+              <label>Action<input name="action" placeholder="exec:run" required /></label>
+              <label>Resource<input name="resource" placeholder="shell" required /></label>
+              <label>Reason<input name="reason" placeholder="Reason" /></label>
+              <button type="submit">Request Approval</button>
+            </form>
+            <div id="approval-result" class="result-surface"></div>
+          </section>
+          <section class="panel">
+            <h3>Approval Queue</h3>
+            <div id="approvals-result" class="decision-list">Sign in to view approvals.</div>
+          </section>
+        </section>
+
+        <section id="activity-view" class="view" aria-labelledby="activity-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="activity-title">Activity</h2>
+              <p>Observed sessions, jobs, and durable audit records.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <h3>Sessions & Jobs</h3>
+            <div id="activity-result" class="decision-list">No activity yet.</div>
+          </section>
+          <section class="panel">
+            <h3>Recent Audit</h3>
+            <div id="audit-log" class="table-surface">No audit events yet.</div>
+          </section>
+        </section>
+
+        <section id="usage-view" class="view" aria-labelledby="usage-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="usage-title">Usage</h2>
+              <p>Token, cost, model, and tool breakdowns from Operant and OpenClaw observations.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <h3>Usage & Cost</h3>
+            <div id="usage-summary" class="usage-grid">No usage events yet.</div>
+          </section>
+          <section class="panel">
+            <h3>Recent Usage Events</h3>
+            <div id="usage-events" class="table-surface">No usage events yet.</div>
+          </section>
+        </section>
+
+        <section id="data-view" class="view" aria-labelledby="data-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="data-title">Data</h2>
+              <p>Workspace settings, retention, exports, wipes, and credential inventory.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <h3>Workspace Settings</h3>
+            <form id="settings-form" class="form-grid">
+              <label>Company name<input name="companyName" placeholder="Company name" /></label>
+              <label>Workspace name<input name="workspaceName" placeholder="Workspace name" /></label>
+              <label>Slack team ID<input name="slackTeamId" placeholder="Slack team ID" /></label>
+              <label>OpenClaw gateway URL<input name="openclawGatewayUrl" placeholder="http://openclaw-gateway:18789" /></label>
+              <label>Model provider
+                <select name="modelProvider">
+                  <option value="">(unchanged)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </label>
+              <label>Model name<input name="modelName" placeholder="Model name" /></label>
+              <label>Retention days<input name="retentionDays" type="number" min="1" max="3650" placeholder="Retention days" /></label>
+              <div class="form-actions">
+                <button type="submit">Save Settings</button>
+              </div>
+            </form>
+            <div id="settings-result" class="result-surface">Sign in to view settings.</div>
+          </section>
+
+          <section class="panel danger-zone">
+            <div class="section-heading">
+              <div>
+                <h3>Retention, Export, Wipe</h3>
+                <p>These actions execute immediately in the current first-slice backend and write audit evidence.</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="retention-purge" type="button" class="warning-button">Apply Retention</button>
+              <button id="queue-export" type="button" class="secondary-button">Create Export</button>
+              <select id="wipe-scope" aria-label="Wipe scope">
+                <option value="usage">Usage</option>
+                <option value="sessions">Sessions</option>
+                <option value="audit">Audit</option>
+                <option value="workspace">Workspace</option>
+              </select>
+              <button id="queue-wipe" type="button" class="danger-button">Run Wipe</button>
+            </div>
+            <div id="data-result" class="result-surface"></div>
+          </section>
+
+          <section class="panel">
+            <h3>Integration Credentials</h3>
+            <form id="integration-credential-form" class="form-grid">
+              <label>Kind<input name="kind" placeholder="github" required /></label>
+              <label>Secret key<input name="key" placeholder="apiToken" required /></label>
+              <label>Label<input name="label" placeholder="GitHub API token" /></label>
+              <label>Secret value<input name="secretValue" type="password" required autocomplete="off" /></label>
+              <label>Slack user ID<input name="slackUserId" placeholder="U12345678 - blank for workspace-shared" /></label>
+              <div class="form-actions">
+                <button type="submit">Save Integration Secret</button>
+              </div>
+            </form>
+            <div id="integration-credentials-result" class="table-surface">Sign in to manage integration credentials.</div>
+          </section>
+        </section>
+
+        <section id="openclaw-view" class="view" aria-labelledby="openclaw-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="openclaw-title">OpenClaw</h2>
+              <p>Generate config, sync observations, and run gateway checks through the existing wrapper.</p>
+            </div>
+            <div class="actions">
+              <button id="generate-config" type="button">Regenerate OpenClaw Config</button>
+              <button id="sync-openclaw" type="button" class="secondary-button">Sync OpenClaw Activity</button>
+            </div>
+          </div>
+          <section class="panel">
+            <h3>Latest Config</h3>
+            <div id="config-summary" class="config-summary">No config generated.</div>
+          </section>
+          <section class="panel">
+            <h3>OpenClaw Checks</h3>
+            <div class="actions openclaw-actions">
+              <button class="openclaw-check" data-check="status" type="button">Status</button>
+              <button class="openclaw-check" data-check="doctor" type="button">Doctor</button>
+              <button class="openclaw-check" data-check="config-validate" type="button">Config Validate</button>
+              <button class="openclaw-check" data-check="secrets-reload" type="button">Reload Secrets</button>
+              <button class="openclaw-check" data-check="approvals-get" type="button">Exec Approval Policy</button>
+              <button class="openclaw-check" data-check="cron-status" type="button">Cron Status</button>
+              <button class="openclaw-check" data-check="tasks-list" type="button">Tasks</button>
+              <button class="openclaw-check" data-check="usage-cost" type="button">Usage Cost</button>
+              <button class="openclaw-check" data-check="security-audit" type="button">Security Audit</button>
+              <button class="openclaw-check" data-check="channels-status" type="button">Slack Probe</button>
+            </div>
+            <div id="openclaw-result" class="result-surface"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="confirm-modal" class="confirm-modal">
+      <form method="dialog">
+        <h3 id="confirm-title">Confirm action</h3>
+        <p id="confirm-detail"></p>
+        <div id="confirm-summary" class="confirm-summary"></div>
+        <div class="modal-actions">
+          <button id="confirm-cancel" type="button" class="ghost-button">Cancel</button>
+          <button id="confirm-accept" type="button" class="danger-button">Confirm</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" role="status"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

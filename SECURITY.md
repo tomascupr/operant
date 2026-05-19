@@ -1,0 +1,50 @@
+# Security Policy
+
+## Reporting a vulnerability
+
+If you find a security issue in Operant, please email
+**work@tomcupr.com** with the details. Do **not** open a public GitHub issue
+for security reports.
+
+What to include:
+
+- A description of the issue and the impact you observed.
+- Steps to reproduce, ideally against a clean `pnpm compose:up -- -d` stack.
+- The commit SHA and `OPENCLAW_VERSION` you tested against.
+
+What to expect:
+
+- An acknowledgement within 3 business days.
+- A public credit in the release notes if you want one (default: yes,
+  attributed to your GitHub handle; let us know if you prefer otherwise).
+- A coordinated disclosure window: we will agree on a patch date with you
+  before publishing the fix. The default window is 90 days from
+  acknowledgement, shorter if a fix is straightforward.
+
+## Scope
+
+In scope for the OSS core:
+
+- Credential leakage from Operant Postgres, the control-plane HTTP API,
+  the static dashboard, or the generated OpenClaw config.
+- RBAC bypass against the control-plane API.
+- Slack admission policy bypass (denied user reaching the bot, undocumented
+  channel access).
+- Plaintext storage of any value that should be encrypted at rest.
+- Local privilege escalation paths through the Compose topology.
+
+Out of scope:
+
+- Issues that require Docker host root or physical access.
+- Findings against deployments that have disabled the documented defaults
+  (sandbox overlay on a shared host, non-loopback host port binds, etc.).
+- Upstream issues that belong in [OpenClaw](https://docs.openclaw.ai),
+  Postgres, Redis, or Pipedream Connect. Please report those to the
+  respective projects; we will mirror an advisory if Operant exposes the
+  defect in a non-default way.
+
+## Supported versions
+
+Operant is pre-1.0. We patch the latest tagged release. Older tags do not
+receive backported fixes unless a customer engagement explicitly covers
+them.

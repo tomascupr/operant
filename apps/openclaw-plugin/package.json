@@ -1,0 +1,33 @@
+{
+  "name": "@operant/openclaw-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Operant control-plane bridge plugin for OpenClaw — exposes per-user policy, RBAC, and integration credentials as MCP-shaped tools.",
+  "openclaw": {
+    "extensions": ["./dist/src/index.js"]
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm build && node --test dist/tests/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.5.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "openclaw": "2026.5.12",
+    "typescript": "^5.9.3"
+  }
+}

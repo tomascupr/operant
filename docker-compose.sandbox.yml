@@ -1,0 +1,36 @@
+# Optional Docker-backed OpenClaw sandbox overlay.
+#
+# Use this only on a dedicated single-trust-boundary Docker host. Mounting the
+# Docker socket gives the OpenClaw gateway broad control over that Docker host.
+# The overlay builds a local gateway image with Docker CLI and adds the gateway
+# process to the configured Docker socket group.
+services:
+  policy-audit:
+    environment:
+      OPERANT_OPENCLAW_SANDBOX_MODE: docker
+
+  openclaw-gateway:
+    image: operant-openclaw-sandbox:${OPENCLAW_VERSION:-2026.5.18}
+    build:
+      context: .
+      dockerfile: deploy/openclaw/Dockerfile.sandbox
+      args:
+        OPENCLAW_VERSION: ${OPENCLAW_VERSION:-2026.5.18}
+        DOCKER_CLI_VERSION: ${DOCKER_CLI_VERSION:-29.4.3}
+    group_add:
+      - ${OPENCLAW_DOCKER_GID:-991}
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - ${OPENCLAW_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    command:
+      - sh
+      - -lc
+      - |
+        mkdir -p /home/node/.openclaw/agents/main/sessions
+        chmod 700 /home/node/.openclaw
+        operant-ensure-slack-plugin
+        if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+          docker build -t openclaw-sandbox:bookworm-slim -f /usr/local/share/operant/openclaw/Dockerfile.sandbox-runtime /usr/local/share/operant/openclaw
+        fi
+        exec openclaw gateway run --allow-unconfigured --port 18789 --bind lan --auth token

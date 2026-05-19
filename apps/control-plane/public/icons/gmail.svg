@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Gmail">
+  <rect width="64" height="64" rx="12" fill="#fff"/>
+  <path d="M12 20h40v28H12z" fill="#f2f4f7"/>
+  <path d="M12 20l20 16 20-16v8L32 44 12 28z" fill="#ea4335"/>
+  <path d="M12 20l20 16 20-16" fill="none" stroke="#b42318" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M12 20v28h8V26z" fill="#fbbc04"/>
+  <path d="M52 20v28h-8V26z" fill="#34a853"/>
+</svg>

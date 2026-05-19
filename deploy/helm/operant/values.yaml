@@ -1,0 +1,66 @@
+# One replica per trust boundary. Run another release for another
+# company/workspace instead of scaling this StatefulSet horizontally.
+replicaCount: 1
+
+imagePullPolicy: IfNotPresent
+
+controlPlane:
+  image:
+    repository: ghcr.io/operant/control-plane
+    tag: "0.1.0"
+  port: 8080
+  publicPort: 80
+  resources: {}
+
+openclaw:
+  image:
+    repository: ghcr.io/openclaw/openclaw
+    tag: "2026.5.12"
+  port: 18789
+  service:
+    enabled: false
+    publicPort: 18789
+  resources: {}
+
+database:
+  url: ""
+  existingSecret:
+    name: ""
+    key: DATABASE_URL
+
+redis:
+  url: ""
+  existingSecret:
+    name: ""
+    key: REDIS_URL
+
+secrets:
+  create: false
+  existingSecret: ""
+  operantSecretKey: ""
+  operantInternalToken: ""
+  operantAdminLoginToken: ""
+  openclawGatewayToken: ""
+
+workspace:
+  companyName: Acme Inc.
+  name: Acme Slack
+
+storage:
+  className: ""
+  openclawStateSize: 20Gi
+  openclawConfigSize: 1Gi
+
+service:
+  type: ClusterIP
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

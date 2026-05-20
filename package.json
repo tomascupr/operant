@@ -2,7 +2,7 @@
   "name": "operant",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-hostable enterprise Slack AI coworker control plane for OpenClaw.",
+  "description": "Self-hosted agents in Slack. Per-user OAuth, per-human audit, RBAC, approvals. Control plane for OpenClaw.",
   "license": "MIT",
   "type": "module",
   "homepage": "https://github.com/tomascupr/operant#readme",

@@ -4,12 +4,12 @@
 [![verify](https://github.com/tomascupr/operant/actions/workflows/verify.yml/badge.svg)](https://github.com/tomascupr/operant/actions/workflows/verify.yml)
 [![Node 24](https://img.shields.io/badge/node-24%2B-brightgreen)](package.json)
 
-**Self-hostable Slack AI with per-user OAuth and per-human audit.**
+**Self-hosted agents in Slack — per-user OAuth, per-human audit.**
 
-Hosted Slack agents share one bot identity across your whole company.
+Hosted agents in Slack share one bot identity across your whole company.
 Every employee's actions land in the audit log under "the workspace did
 it." Operant doesn't. Each Slack user OAuths their own Gmail, Notion,
-GitHub, Linear, HubSpot. The bot calls those tools under that human's
+GitHub, Linear, HubSpot. The agent calls those tools under that human's
 connection, and every session, policy decision, and tool call names the
 person who triggered it.
 

@@ -20,6 +20,7 @@ v0.1.0 tag was placed on `49064d5`.
 - README rewritten from first principles for accuracy and brevity.
 - README mentions `corepack enable` for users without pnpm 11 (Node 24 ships with Corepack and `package.json` pins `pnpm@11.0.3`).
 - `deploy/fly/README.md` labeled "Preview — not GA" so evaluators don't try a half-finished deployment path.
+- Repositioned from "Slack AI coworker" to **self-hosted agents in Slack** across README, `package.json`, Helm `Chart.yaml`, Slack `manifest.yaml`, and the GitHub repo description. "Slack AI" is literally Slack's own product name; "agents in Slack" frames Operant as a control plane for the agent category, not an AI assistant.
 
 ### Fixed
 - CI: pnpm/action-setup picks its version from `package.json`'s `packageManager` field instead of pinning explicitly.

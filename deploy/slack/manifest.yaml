@@ -2,7 +2,7 @@ _metadata:
   major_version: 1
 display_information:
   name: Operant OpenClaw
-  description: Self-hosted enterprise Slack AI coworker powered by OpenClaw.
+  description: Self-hosted AI agents in your Slack workspace, powered by OpenClaw.
 features:
   bot_user:
     display_name: Operant

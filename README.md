@@ -21,12 +21,17 @@ person who triggered it.
 pnpm install
 pnpm init:env
 pnpm compose:up -- -d
+pnpm doctor
 open http://localhost:8080
 ```
 
 Sign in with the `OPERANT_ADMIN_LOGIN_TOKEN` from your generated `.env`
-plus your Slack user ID. Full walkthrough in
-**[docs/setup.md](docs/setup.md)**.
+plus your Slack member ID (Slack profile → "Copy member ID"). The
+**Setup** tab then walks you through Slack/model credentials — create
+the Slack app from
+[deploy/slack/manifest.yaml](deploy/slack/manifest.yaml) first
+(see [deploy/slack/README.md](deploy/slack/README.md)). Full
+walkthrough in **[docs/setup.md](docs/setup.md)**.
 
 Requirements: Node 24+, pnpm 11+, Docker Compose v2.
 

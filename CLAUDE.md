@@ -8,12 +8,19 @@ Operant is a self-hostable, MIT-licensed control plane for agents in Slack. It w
 
 The README is the project-facing overview. Operational setup lives in `docs/setup.md`; Slack scopes/events and live acceptance details live in `deploy/slack/README.md`. When in doubt about Slack/live-acceptance flow, scopes, manual vs. token mode, sandbox overlay, or env aliases, read those docs before improvising.
 
+## Coding behavior
+
+- **Think first.** State assumptions before coding; if uncertain, ask. When multiple interpretations exist, surface them — don't pick silently. Push back when a simpler approach exists.
+- **Simplicity first.** Minimum code that solves the problem. No abstractions for single-use code, no error handling for impossible scenarios, no "flexibility" that wasn't asked for.
+- **Surgical changes.** Touch only what the request requires. Don't "improve" adjacent code, comments, or formatting; don't refactor what isn't broken. Match existing style. Mention pre-existing dead code rather than deleting it.
+- **Goal-driven execution.** Translate each task into a verifiable goal before coding ("fix the bug" → "write a failing reproducer, then make it pass"). For multi-step work, state plan + verify per step and loop until each step is green.
+
 ## Workspace layout
 
 pnpm workspace, Node 24, pnpm 11. Two apps: `apps/control-plane` (`@operant/control-plane`) is the HTTP control plane; `apps/openclaw-plugin` (`@operant/openclaw-plugin`) is an OpenClaw plugin bundled into the gateway image. Everything else is operational scripting (`scripts/`), deploy artifacts (`deploy/{openclaw,slack,helm,fly}`), or docs.
 
-- `apps/control-plane/src/server.ts` (~2.4k LoC) is the entire HTTP API. No framework — raw `node:http` with a single `route()` function dispatching on method+pathname. New endpoints go in `route()` near the existing handlers; static files under `apps/control-plane/public/` are served by the same process.
-- `apps/control-plane/src/{secrets,policy,rbac,openclaw-config,openclaw-ops,retention,redaction,seed,schema,auth,db}.ts` — domain modules; `schema.ts` holds zod validators and shared types.
+- `apps/control-plane/src/server.ts` (~2.8k LoC) is the entire HTTP API. No framework — raw `node:http` with a single `route()` function dispatching on method+pathname. New endpoints go in `route()` near the existing handlers; static files under `apps/control-plane/public/` are served by the same process.
+- `apps/control-plane/src/{secrets,policy,rbac,openclaw-config,openclaw-ops,retention,redaction,seed,schema,auth,db}.ts` — domain modules; `schema.ts` holds zod validators and shared types; `redaction.ts` is the shared sanitizer applied before persisting reports/audit payloads (token-shape regexes for Slack/OpenAI/GitHub/AWS plus a sensitive-key matcher).
 - `apps/control-plane/migrations/NNN_*.sql` — raw SQL migrations applied transactionally by `runMigrations` on boot. To add one, drop the next-numbered file; the runner records it in `schema_migrations`.
 - `apps/control-plane/tests/*.test.ts` — Node's built-in `node:test`. Tests run against compiled JS (`dist/tests/*.test.js`), not via ts-node.
 - `apps/control-plane/public/{index.html,app.js,styles.css}` — vanilla JS dashboard. Strict CSP allows only same-origin scripts/styles, so no CDNs or inline scripts.
@@ -35,14 +42,17 @@ Inner dev loop (no Docker):
 - `pnpm build` — `tsc` into `apps/control-plane/dist/`
 - `pnpm test` — builds, then `node --test dist/tests/*.test.js`. Single test file: `pnpm --filter @operant/control-plane build && node --test apps/control-plane/dist/tests/policy.test.js`. Single test by name within a file: `node --test --test-name-pattern="<regex>" apps/control-plane/dist/tests/policy.test.js`.
 - `pnpm dev` — builds and runs `node dist/src/server.js`. Requires `DATABASE_URL` and `OPERANT_SECRET_KEY` in the environment; easiest path is `pnpm compose:up` first, then `pnpm dev` against `localhost:5432`.
+- `pnpm smoke` / `pnpm smoke:local` — process-level smoke against `apps/control-plane` (no Docker); asserts CSP and security headers. The `:local` variant runs in `--managed` mode.
+- `pnpm dashboard:e2e` — headless Chrome dashboard E2E (honours `CHROME_PATH`). Included in the full `pnpm verify` chain.
 
-Full static gauntlet: `pnpm verify` chains `verify:scripts` → `typecheck` → `test` → `verify:compose` → `verify:deploy`. `verify:scripts` runs `node --check` plus self-tests for every script and three `compose config` dry runs (base, queue profile, sandbox overlay). Run this before claiming anything passes.
+Full static gauntlet: `pnpm verify` chains `verify:scripts` → `typecheck` → `test` → `dashboard:e2e` → `verify:compose` → `verify:deploy`. `verify:scripts` runs `node --check` plus self-tests for every script and three `compose config` dry runs (base, queue profile, sandbox overlay). Run this before claiming anything passes.
 
 Runtime / live gates (in dependency order):
 - `pnpm doctor -- --preflight-only` — local env + Compose preflight
-- `pnpm compose:up [-- --profile queue] [-- --file docker-compose.sandbox.yml]`
+- `pnpm compose:config` / `pnpm compose:up [-- --profile queue] [-- --file docker-compose.sandbox.yml]` / `pnpm compose:down` — compose lifecycle (all wrap `scripts/operant-compose.mjs`)
 - `pnpm doctor` — full health/ready/OpenClaw checks against the running stack
 - `pnpm compose:smoke` / `pnpm compose:smoke:sandbox` — non-live runtime smoke; writes `.operant/compose-smoke-report.json`
+- `pnpm compose:live` — full Compose E2E with the live + completion-audit gates skipped (fast inner loop when iterating on compose itself)
 - `pnpm live:preflight -- --env .env --live-env .env.live` — validates Slack + model creds without starting Compose
 - `pnpm live:e2e` — assisted live Slack/OpenClaw E2E against an already-running stack
 - `pnpm compose:e2e -- --env .env --live-env .env.live` — strict live + restart gate (full customer-run flow); writes `.operant/compose-e2e-report.json`
@@ -51,7 +61,7 @@ Runtime / live gates (in dependency order):
 - `pnpm acceptance:local [-- --include-sandbox]` — bundles the local/static gauntlet and regenerates reports
 - `pnpm handoff:{readiness,verify}`, `pnpm live:acceptance{,:preflight}` — customer-facing wrappers; in a fresh checkout (no `.operant/` bundle) they print the direct command path instead of failing.
 
-Slack diagnostics: `pnpm slack:scopes [-- --json]` prints the required bot scopes; `pnpm slack:socket-probe -- --env .env --manual-user-id U... --nudge` opens a raw Socket Mode connection to isolate Slack-app-side issues from OpenClaw.
+Slack diagnostics: `pnpm slack:scopes [-- --json]` prints the required bot scopes; `pnpm slack:socket-probe -- --env .env --manual-user-id U... --nudge` opens a raw Socket Mode connection to isolate Slack-app-side issues from OpenClaw. Additional probes — `pnpm slack:manifest-probe` exports the installed Slack app manifest via a Slack config token and validates it against the scope contract; `pnpm slack:dm-probe` waits for a human to post a nonce in the bot DM channel as live-DM evidence; `pnpm slack:user-token` exchanges an OAuth callback code for a user token and writes it to a gitignored env file (never prints it); `pnpm slack:user-token-probe` posts a message as the user token and reads it back with the bot token to verify Slack stored it as a true human-authored message rather than app-authored (the distinction OpenClaw uses to suppress bot loops).
 
 ## Architecture
 
@@ -90,7 +100,7 @@ Slack diagnostics: `pnpm slack:scopes [-- --json]` prints the required bot scope
 
 ## Live testing without user tokens
 
-Set `OPERANT_LIVE_MANUAL_SLACK_POSTS=1` (or pass `--manual-slack-posts`) and the verifier waits for the configured humans to post the printed mention/DM/denied/approval prompts. Manual mode is the right path when you only have app-level + bot tokens; a timeout in manual mode means the verifier reached the live checkpoint and is still waiting for a human, not that the run failed.
+Set `OPERANT_LIVE_MANUAL_SLACK_POSTS=1` (or pass `--manual-slack-posts`) and the verifier waits for the configured humans to post the printed mention/DM/denied/approval prompts. Manual mode is the right path when you only have app-level + bot tokens; a timeout in manual mode means the verifier reached the live checkpoint and is still waiting for a human, not that the run failed. The `:manual` script aliases (`pnpm live:preflight:manual`, `pnpm live:e2e:manual`, `pnpm compose:e2e:manual`) are pre-wired with `--manual-slack-posts --manual-slack-nudge`.
 
 ## When unsure
 

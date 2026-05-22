@@ -19,6 +19,7 @@ import {
   runOpenClawCommand,
 } from "./openclaw-ops.js";
 import { evaluatePolicy, evaluateToolOnly, summarizeApprovalRequirement } from "./policy.js";
+import { createPipedreamConnectClientFromEnv, type PipedreamConnectClient } from "./pipedream.js";
 import { defaultRolePermissions, permissionMatches } from "./rbac.js";
 import { redactRecordForPersistence } from "./redaction.js";
 import { applyRetentionPurge, applyRetentionWipe, buildRetentionExport, retentionWipeScopes } from "./retention.js";
@@ -55,6 +56,8 @@ const openClawUsageLabelSchema = z.string().min(1).max(160);
 const maxJsonBodyBytes = 1024 * 1024;
 const pipedreamOAuthTokenUrl = "https://api.pipedream.com/v1/oauth/token";
 const pipedreamDiagnosticsTimeoutMs = Number(process.env.PIPEDREAM_DIAGNOSTICS_TIMEOUT_MS || 8_000);
+const pipedreamAppSlugSchema = z.string().min(1).max(120).regex(/^[A-Za-z0-9_.-]+$/);
+const pipedreamAccountIdSchema = z.string().min(1).max(180).regex(/^[A-Za-z0-9_.:-]+$/);
 
 export const pipedreamDiagnosticEnvKeys = [
   "OPERANT_MCP_SOURCE_PIPEDREAM_URL",
@@ -1175,6 +1178,171 @@ async function handleListIntegrationCredentials(context: RouteContext): Promise<
   sendJson(res, 200, { credentials: result.rows });
 }
 
+function requestOrigin(req: IncomingMessage): string {
+  const host = req.headers["x-forwarded-host"]?.toString().split(",")[0]?.trim() || req.headers.host || "localhost";
+  const proto = req.headers["x-forwarded-proto"]?.toString().split(",")[0]?.trim() || "http";
+  return `${proto}://${host}`;
+}
+
+function pipedreamClientForResponse(res: ServerResponse): PipedreamConnectClient | null {
+  const client = createPipedreamConnectClientFromEnv();
+  if (!client) {
+    sendJson(res, 503, {
+      error: "Pipedream Connect is not configured",
+      code: "pipedream_not_configured",
+      required: pipedreamDiagnosticEnvKeys,
+    });
+    return null;
+  }
+  return client;
+}
+
+function pipedreamActionFromToolName(appSlug: string, toolName: string): string {
+  const prefix = `${appSlug}-`;
+  if (toolName.startsWith(prefix) && toolName.length > prefix.length) return toolName.slice(prefix.length);
+  const dashIdx = toolName.indexOf("-");
+  return dashIdx < 0 ? "*" : toolName.slice(dashIdx + 1);
+}
+
+async function handlePipedreamApps(context: RouteContext): Promise<void> {
+  const { res, state, url } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "integrations:read", resource: "integration" });
+  if (!allowed.ok) return;
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 40), 1), 100);
+  const q = url.searchParams.get("q")?.trim() || undefined;
+  const after = url.searchParams.get("after")?.trim() || undefined;
+  const result = await client.listApps({ q, limit, after });
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    eventType: "pipedream.apps_searched",
+    resourceType: "pipedream_app",
+    metadata: { q, count: result.apps.length },
+  });
+  sendJson(res, 200, result);
+}
+
+async function handlePipedreamAccounts(context: RouteContext): Promise<void> {
+  const { res, state, url } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "integrations:connect", resource: "integration" });
+  if (!allowed.ok) return;
+  if (!allowed.actorSlackUserId) {
+    sendJson(res, 409, { error: "Pipedream account state requires a Slack user identity" });
+    return;
+  }
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const app = url.searchParams.get("app")?.trim() || undefined;
+  if (app) pipedreamAppSlugSchema.parse(app);
+  const accounts = await client.listAccounts({ externalUserId: allowed.actorSlackUserId, app });
+  sendJson(res, 200, { accounts });
+}
+
+async function handlePipedreamAppActions(context: RouteContext): Promise<void> {
+  const { res, state, url } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "integrations:read", resource: "integration" });
+  if (!allowed.ok) return;
+  if (!allowed.actorSlackUserId) {
+    sendJson(res, 409, { error: "Pipedream action discovery requires a Slack user identity" });
+    return;
+  }
+  const match = url.pathname.match(/^\/api\/integrations\/pipedream\/apps\/([^/]+)\/actions$/);
+  const appSlug = pipedreamAppSlugSchema.parse(match ? decodeURIComponent(match[1]) : "");
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const [tools, toolPolicies] = await Promise.all([
+    client.listTools({ externalUserId: allowed.actorSlackUserId, appSlug }),
+    loadToolPolicies(state.pool, workspace.id),
+  ]);
+  const result = tools.flatMap((tool) => {
+    const action = pipedreamActionFromToolName(appSlug, tool.name);
+    const decision = evaluateToolOnly({ tool: `pipedream:${appSlug}`, action }, { toolPolicies });
+    return decision.effect === "deny"
+      ? []
+      : [{
+          toolName: tool.name,
+          action,
+          description: tool.description ?? "",
+          inputSchema: tool.inputSchema,
+          policy: decision,
+        }];
+  });
+  sendJson(res, 200, { app: appSlug, actions: result });
+}
+
+async function handlePipedreamConnectToken(context: RouteContext): Promise<void> {
+  const { req, res, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "integrations:connect", resource: "integration" });
+  if (!allowed.ok) return;
+  if (!allowed.actorSlackUserId) {
+    sendJson(res, 409, { error: "Pipedream Connect requires a Slack user identity" });
+    return;
+  }
+  const body = z.object({ appSlug: pipedreamAppSlugSchema.optional() }).parse(await readJson(req));
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const token = await client.createConnectToken({
+    externalUserId: allowed.actorSlackUserId,
+    appSlug: body.appSlug,
+    allowedOrigins: [requestOrigin(req)],
+  });
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    eventType: "pipedream.connect_token_created",
+    resourceType: "pipedream_account",
+    metadata: {
+      app: body.appSlug ?? null,
+      slackUserId: allowed.actorSlackUserId,
+      expiresAt: token.expiresAt,
+    },
+  });
+  sendJson(res, 200, {
+    app: body.appSlug ?? null,
+    expiresAt: token.expiresAt,
+    connectLinkUrl: token.connectLinkUrl,
+  });
+}
+
+async function handlePipedreamDisconnectAccount(context: RouteContext): Promise<void> {
+  const { res, state, url } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "integrations:connect", resource: "integration" });
+  if (!allowed.ok) return;
+  if (!allowed.actorSlackUserId) {
+    sendJson(res, 409, { error: "Pipedream disconnect requires a Slack user identity" });
+    return;
+  }
+  const accountId = pipedreamAccountIdSchema.parse(decodeURIComponent(url.pathname.replace("/api/integrations/pipedream/accounts/", "")));
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const accounts = await client.listAccounts({ externalUserId: allowed.actorSlackUserId });
+  const account = accounts.find((item) => item.id === accountId);
+  if (!account) {
+    sendJson(res, 404, { error: "Connected account not found for this Slack user" });
+    return;
+  }
+  await client.deleteAccount(accountId);
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    eventType: "pipedream.account_disconnected",
+    resourceType: "pipedream_account",
+    resourceId: accountId,
+    metadata: { app: account.app, slackUserId: allowed.actorSlackUserId },
+  });
+  sendJson(res, 200, { ok: true, accountId });
+}
+
 async function handleUpsertIntegrationCredential(context: RouteContext): Promise<void> {
   const { req, res, state } = context;
   const workspace = await getWorkspace(state.pool);
@@ -2247,6 +2415,90 @@ async function handlePluginPolicyCheck({ req, res, state }: RouteContext): Promi
   sendJson(res, 200, decision);
 }
 
+async function handlePluginPipedreamSearchApps({ req, res, state }: RouteContext): Promise<void> {
+  if (!isAuthorizedInternalRequest(req)) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const input = z.object({
+    q: z.string().trim().min(1).max(120).optional(),
+    limit: z.number().int().min(1).max(50).default(20),
+  }).parse(await readJson(req));
+  const workspace = await getWorkspace(state.pool);
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const result = await client.listApps({ q: input.q, limit: input.limit });
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    eventType: "pipedream.apps_searched",
+    resourceType: "pipedream_app",
+    metadata: { q: input.q, count: result.apps.length, source: "plugin" },
+  });
+  sendJson(res, 200, result);
+}
+
+async function handlePluginPipedreamConnectToken({ req, res, state }: RouteContext): Promise<void> {
+  if (!isAuthorizedInternalRequest(req)) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const input = z.object({
+    slackUserId: slackIdSchema,
+    appSlug: pipedreamAppSlugSchema.optional(),
+  }).parse(await readJson(req));
+  const workspace = await getWorkspace(state.pool);
+  if (input.appSlug) {
+    const toolPolicies = await loadToolPolicies(state.pool, workspace.id);
+    const decision = evaluateToolOnly({ tool: `pipedream:${input.appSlug}`, action: "*" }, { toolPolicies });
+    if (decision.effect === "deny") {
+      await audit(state.pool, {
+        companyId: workspace.company_id,
+        workspaceId: workspace.id,
+        eventType: "pipedream.connect_token_denied",
+        resourceType: "pipedream_account",
+        outcome: "deny",
+        metadata: { app: input.appSlug, slackUserId: input.slackUserId, reasons: decision.reasons },
+      });
+      sendJson(res, 403, { error: "policy_denied", reasons: decision.reasons });
+      return;
+    }
+  }
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const token = await client.createConnectToken({
+    externalUserId: input.slackUserId,
+    appSlug: input.appSlug,
+  });
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    eventType: "pipedream.connect_token_created",
+    resourceType: "pipedream_account",
+    metadata: { app: input.appSlug ?? null, slackUserId: input.slackUserId, expiresAt: token.expiresAt, source: "plugin" },
+  });
+  sendJson(res, 200, {
+    app: input.appSlug ?? null,
+    expiresAt: token.expiresAt,
+    connectLinkUrl: token.connectLinkUrl,
+  });
+}
+
+async function handlePluginPipedreamAccounts({ req, res }: RouteContext): Promise<void> {
+  if (!isAuthorizedInternalRequest(req)) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const input = z.object({
+    slackUserId: slackIdSchema,
+    app: pipedreamAppSlugSchema.optional(),
+  }).parse(await readJson(req));
+  const client = pipedreamClientForResponse(res);
+  if (!client) return;
+  const accounts = await client.listAccounts({ externalUserId: input.slackUserId, app: input.app });
+  sendJson(res, 200, { accounts });
+}
+
 async function handleUsageSummary(context: RouteContext): Promise<void> {
   const { res, state } = context;
   const workspace = await getWorkspace(state.pool);
@@ -2761,6 +3013,11 @@ async function route(context: RouteContext): Promise<void> {
   if (req.method === "POST" && url.pathname === "/api/config/credentials") return handleCredentials(context);
   if (req.method === "GET" && url.pathname === "/api/integrations/credentials") return handleListIntegrationCredentials(context);
   if (req.method === "POST" && url.pathname === "/api/integrations/credentials") return handleUpsertIntegrationCredential(context);
+  if (req.method === "GET" && url.pathname === "/api/integrations/pipedream/apps") return handlePipedreamApps(context);
+  if (req.method === "GET" && url.pathname === "/api/integrations/pipedream/accounts") return handlePipedreamAccounts(context);
+  if (req.method === "POST" && url.pathname === "/api/integrations/pipedream/connect-token") return handlePipedreamConnectToken(context);
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/integrations/pipedream/accounts/")) return handlePipedreamDisconnectAccount(context);
+  if (req.method === "GET" && /^\/api\/integrations\/pipedream\/apps\/[^/]+\/actions$/.test(url.pathname)) return handlePipedreamAppActions(context);
   if (req.method === "POST" && url.pathname === "/api/openclaw/config") return handleGenerateConfig(context);
   if (req.method === "GET" && url.pathname === "/api/openclaw/config") return handleGetConfig(context);
   if (req.method === "GET" && url.pathname === "/api/openclaw/checks") return handleOpenClawChecksIndex(context);
@@ -2790,6 +3047,9 @@ async function route(context: RouteContext): Promise<void> {
   if (req.method === "POST" && url.pathname === "/internal/openclaw/events") return handleOpenClawEvent(context);
   if (req.method === "POST" && url.pathname === "/internal/plugin/user-context") return handlePluginUserContext(context);
   if (req.method === "POST" && url.pathname === "/internal/plugin/policy-check") return handlePluginPolicyCheck(context);
+  if (req.method === "POST" && url.pathname === "/internal/plugin/pipedream/apps") return handlePluginPipedreamSearchApps(context);
+  if (req.method === "POST" && url.pathname === "/internal/plugin/pipedream/connect-token") return handlePluginPipedreamConnectToken(context);
+  if (req.method === "POST" && url.pathname === "/internal/plugin/pipedream/accounts") return handlePluginPipedreamAccounts(context);
   if (req.method === "GET") return serveStatic(res, url.pathname);
   sendJson(res, 404, { error: "Not found" });
 }

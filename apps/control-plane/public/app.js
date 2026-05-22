@@ -24,6 +24,10 @@ const appState = {
   usageSummary: null,
   usageEvents: [],
   audit: [],
+  pipedreamApps: [],
+  pipedreamAccounts: [],
+  selectedPipedreamApp: null,
+  pipedreamActions: [],
 };
 
 let activePolicyFilterTool = null;
@@ -208,6 +212,10 @@ function renderSignedOut() {
   $("integration-credentials-result").replaceChildren(emptyState("Sign in required", "Credential metadata is hidden until sign-in."));
   $("pipedream-diagnostics").textContent = "Sign in to view Pipedream diagnostics.";
   $("pipedream-apps-grid").textContent = "Sign in to manage Pipedream policies.";
+  $("pipedream-marketplace-grid").replaceChildren(emptyState("Sign in required", "Pipedream apps are hidden until sign-in."));
+  $("pipedream-accounts").replaceChildren(emptyState("Sign in required", "Connected accounts are hidden until sign-in."));
+  $("pipedream-actions").replaceChildren(emptyState("Select an app", "Sign in, then select an app to preview available actions."));
+  setStatusPill($("pipedream-marketplace-state"), "Waiting", "pending");
 }
 
 function credentialFacts() {
@@ -633,6 +641,131 @@ function renderPipedreamApps(policy, roles) {
   }
 }
 
+function curatedPipedreamApp(slug) {
+  return PIPEDREAM_APPS.find((app) => app.slug === slug);
+}
+
+function pipedreamAppIcon(app) {
+  const curated = curatedPipedreamApp(app.slug);
+  if (curated) return el("img", { src: curated.icon, alt: "", width: "32", height: "32" });
+  const initials = String(app.name || app.slug || "?")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "?";
+  return el("span", { className: "app-letter-tile", textContent: initials });
+}
+
+function policyForPipedreamSlug(slug) {
+  const rule = normalizedPipedreamRule(appState.policy, slug);
+  return rule.effect;
+}
+
+function accountForApp(slug) {
+  return (appState.pipedreamAccounts ?? []).find((account) => account.app === slug);
+}
+
+function renderPipedreamAccounts(accounts) {
+  renderTable($("pipedream-accounts"), [
+    { label: "App", render: (row) => text(row.appName || row.app) },
+    { label: "Account", render: (row) => text(row.name, row.id) },
+    { label: "State", render: (row) => statusPill(row.healthy === false ? "needs attention" : "connected", row.healthy === false ? "bad" : "ok") },
+    { label: "Updated", render: (row) => formatDate(row.updatedAt || row.createdAt) },
+    {
+      label: "Action",
+      render: (row) => el("button", {
+        type: "button",
+        className: "link-button pipedream-disconnect",
+        dataset: { accountId: row.id },
+        textContent: "Disconnect",
+      }),
+    },
+  ], accounts, "No connected accounts", "Connect an app from the marketplace to let Operant act under your account.");
+}
+
+function renderPipedreamMarketplace() {
+  const target = $("pipedream-marketplace-grid");
+  target.replaceChildren();
+  const apps = appState.pipedreamApps ?? [];
+  if (!apps.length) {
+    target.append(emptyState("No apps found", "Search by app name or check Pipedream configuration."));
+    return;
+  }
+  for (const app of apps) {
+    const account = accountForApp(app.slug);
+    const policy = policyForPipedreamSlug(app.slug);
+    const selected = appState.selectedPipedreamApp === app.slug;
+    const card = el("article", { className: selected ? "marketplace-card selected" : "marketplace-card", dataset: { app: app.slug } });
+    card.append(el("div", { className: "app-card-header" }, [
+      el("div", { className: "app-card-title" }, [
+        pipedreamAppIcon(app),
+        el("div", {}, [
+          el("strong", { textContent: app.name }),
+          el("small", { textContent: app.slug }),
+        ]),
+      ]),
+      statusPill(account ? "connected" : "not connected", account ? "ok" : "pending"),
+    ]));
+    card.append(el("p", { textContent: app.description || "Pipedream Connect app" }));
+    card.append(el("div", { className: "card-meta" }, [
+      statusPill(policy, policy === "allow" ? "ok" : policy === "deny" ? "bad" : "pending"),
+      app.category ? statusPill(app.category, "") : null,
+    ].filter(Boolean)));
+    card.append(el("div", { className: "app-controls" }, [
+      el("button", { type: "button", className: "secondary-button pipedream-preview", textContent: "Preview Actions" }),
+      el("button", { type: "button", className: account ? "secondary-button pipedream-connect" : "pipedream-connect", textContent: account ? "Reconnect" : "Connect" }),
+    ]));
+    target.append(card);
+  }
+}
+
+function renderPipedreamActions(appSlug, actions) {
+  const target = $("pipedream-actions");
+  if (!appSlug) {
+    target.replaceChildren(emptyState("Select an app", "Choose an app to preview available actions."));
+    return;
+  }
+  renderTable(target, [
+    { label: "Tool", render: (row) => el("span", { className: "code-chip", textContent: row.toolName }) },
+    { label: "Action", render: (row) => text(row.action) },
+    { label: "Policy", render: (row) => statusPill(row.policy?.effect ?? "unknown", row.policy?.effect === "allow" ? "ok" : row.policy?.effect === "approval_required" ? "pending" : "bad") },
+    { label: "Description", render: (row) => text(row.description) },
+  ], actions, `No available actions for ${appSlug}`, "Policy may deny actions or Pipedream may not expose MCP tools for this app.");
+}
+
+async function loadPipedreamMarketplace(q = "") {
+  setStatusPill($("pipedream-marketplace-state"), "Loading", "pending");
+  const params = new URLSearchParams({ limit: "40" });
+  if (q) params.set("q", q);
+  try {
+    const [apps, accounts] = await Promise.all([
+      request(`/api/integrations/pipedream/apps?${params}`),
+      request("/api/integrations/pipedream/accounts"),
+    ]);
+    appState.pipedreamApps = apps.apps ?? [];
+    appState.pipedreamAccounts = accounts.accounts ?? [];
+    renderPipedreamMarketplace();
+    renderPipedreamAccounts(appState.pipedreamAccounts);
+    setStatusPill($("pipedream-marketplace-state"), `${appState.pipedreamApps.length} apps`, "ok");
+  } catch (error) {
+    appState.pipedreamApps = [];
+    appState.pipedreamAccounts = [];
+    $("pipedream-marketplace-grid").replaceChildren(emptyState("Pipedream unavailable", error.message));
+    $("pipedream-accounts").replaceChildren(emptyState("Pipedream unavailable", "Connected accounts could not be loaded."));
+    setStatusPill($("pipedream-marketplace-state"), "Unavailable", "bad");
+  }
+}
+
+async function loadPipedreamActions(appSlug) {
+  appState.selectedPipedreamApp = appSlug;
+  renderPipedreamMarketplace();
+  $("pipedream-actions").replaceChildren(emptyState("Loading actions", appSlug));
+  const result = await request(`/api/integrations/pipedream/apps/${encodeURIComponent(appSlug)}/actions`);
+  appState.pipedreamActions = result.actions ?? [];
+  renderPipedreamActions(appSlug, appState.pipedreamActions);
+}
+
 async function loadPolicyEditor() {
   const policy = await request("/api/policy");
   appState.policy = policy;
@@ -880,6 +1013,8 @@ async function loadSummary() {
     renderPipedreamApps(appState.policy, appState.roles);
   }
 
+  await loadPipedreamMarketplace().catch(() => {});
+
   try {
     const credentials = await request("/api/integrations/credentials");
     appState.credentials = credentials.credentials ?? [];
@@ -933,6 +1068,61 @@ $("confirm-modal").addEventListener("cancel", (event) => {
 });
 
 $("refresh").addEventListener("click", () => loadSummary().catch((error) => toast(error.message)));
+$("refresh-integrations").addEventListener("click", () => loadPipedreamMarketplace($("pipedream-search-form").elements.q.value.trim()).catch((error) => toast(error.message)));
+
+$("pipedream-search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  await loadPipedreamMarketplace(String(form.get("q") || "").trim());
+});
+
+$("pipedream-marketplace-grid").addEventListener("click", async (event) => {
+  const card = event.target.closest(".marketplace-card");
+  if (!card) return;
+  const slug = card.dataset.app;
+  try {
+    if (event.target.closest(".pipedream-connect")) {
+      const result = await request("/api/integrations/pipedream/connect-token", {
+        method: "POST",
+        body: JSON.stringify({ appSlug: slug }),
+      });
+      window.open(result.connectLinkUrl, "_blank", "noopener");
+      renderOperationResult("pipedream-result", `${slug} connect link`, {
+        ok: true,
+        app: slug,
+        expiresAt: result.expiresAt,
+        connectLinkUrl: result.connectLinkUrl,
+      });
+      toast(`${slug} connect link opened`);
+      return;
+    }
+    if (event.target.closest(".pipedream-preview") || card) {
+      await loadPipedreamActions(slug);
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+$("pipedream-accounts").addEventListener("click", async (event) => {
+  const button = event.target.closest(".pipedream-disconnect");
+  if (!button) return;
+  const accountId = button.dataset.accountId;
+  const ok = await confirmAction({
+    title: "Disconnect Pipedream account",
+    detail: "The account will be revoked in Pipedream and can be reconnected later.",
+    summary: accountId,
+    acceptLabel: "Disconnect",
+  });
+  if (!ok) return;
+  try {
+    const result = await request(`/api/integrations/pipedream/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+    renderOperationResult("pipedream-result", "Pipedream account disconnected", result);
+    await loadPipedreamMarketplace($("pipedream-search-form").elements.q.value.trim());
+  } catch (error) {
+    toast(error.message);
+  }
+});
 
 $("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();

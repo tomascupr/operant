@@ -2,7 +2,13 @@ import { definePluginEntry, jsonResult } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import { createOperantClient, type OperantClient } from "./operant-client.js";
 import { createPipedreamClient, type PipedreamClient } from "./pipedream/client.js";
-import { createPipedreamListActionsTool, createPipedreamRunActionTool } from "./pipedream/tools.js";
+import {
+  createPipedreamConnectAppTool,
+  createPipedreamListActionsTool,
+  createPipedreamListConnectionsTool,
+  createPipedreamRunActionTool,
+  createPipedreamSearchAppsTool,
+} from "./pipedream/tools.js";
 
 export const PingToolParameters = Type.Object({}, { additionalProperties: false });
 
@@ -83,6 +89,9 @@ export default definePluginEntry({
       operantClient,
       slackUserId: ctx.requesterSenderId ?? null,
     });
+    api.registerTool((ctx) => createPipedreamSearchAppsTool(factoryDeps(ctx)));
+    api.registerTool((ctx) => createPipedreamConnectAppTool(factoryDeps(ctx)));
+    api.registerTool((ctx) => createPipedreamListConnectionsTool(factoryDeps(ctx)));
     api.registerTool((ctx) => createPipedreamListActionsTool(factoryDeps(ctx)));
     api.registerTool((ctx) => createPipedreamRunActionTool(factoryDeps(ctx)));
   },

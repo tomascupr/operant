@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const childProcesses = [];
 let tempRoot = null;
+let pipedreamStub = null;
 
 function log(message) {
   process.stdout.write(`${message}\n`);
@@ -97,6 +99,10 @@ async function stopChild(child) {
 
 async function cleanup() {
   for (const child of [...childProcesses].reverse()) await stopChild(child);
+  if (pipedreamStub) {
+    await new Promise((resolve) => pipedreamStub.close(resolve));
+    pipedreamStub = null;
+  }
   if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
 }
 
@@ -219,7 +225,65 @@ process.exit(2);
   const psql = await commandPath("psql", ["/opt/homebrew/opt/postgresql@17/bin/psql"]);
   const pgPort = Number(await getFreePort());
   const appPort = Number(process.env.OPERANT_DASHBOARD_E2E_PORT || await getFreePort());
+  const pipedreamPort = Number(await getFreePort());
   const adminLoginToken = `dashboard-admin-${randomBytes(16).toString("hex")}`;
+
+  pipedreamStub = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const body = raw ? JSON.parse(raw) : {};
+    const url = new URL(req.url || "/", `http://127.0.0.1:${pipedreamPort}`);
+    const send = (status, payload, contentType = "application/json") => {
+      res.writeHead(status, { "content-type": contentType });
+      res.end(contentType === "application/json" ? JSON.stringify(payload) : payload);
+    };
+    if (url.pathname === "/v1/oauth/token") {
+      send(200, { access_token: "pd-dashboard-token", expires_in: 3600 });
+      return;
+    }
+    if (url.pathname === "/v1/apps") {
+      const q = (url.searchParams.get("q") || "").toLowerCase();
+      const apps = [
+        { id: "app_gmail", name: "Gmail", name_slug: "gmail", description: "Read and send email" },
+        { id: "app_github", name: "GitHub", name_slug: "github", description: "Issues, pull requests, and repos" },
+        { id: "app_notion", name: "Notion", name_slug: "notion", description: "Docs and databases" },
+      ].filter((app) => !q || app.name.toLowerCase().includes(q) || app.name_slug.includes(q));
+      send(200, { data: apps, page_info: null });
+      return;
+    }
+    if (url.pathname === "/v1/connect/tokens") {
+      send(200, {
+        token: `ctok_dashboard_${body.user_id || "user"}`,
+        expires_at: new Date(Date.now() + 300_000).toISOString(),
+      });
+      return;
+    }
+    if (url.pathname === "/v1/connect/proj_dashboard/accounts") {
+      send(200, {
+        data: [
+          { id: "apn_dashboard_github", app_slug: "github", app_name: "GitHub", external_user_id: url.searchParams.get("external_user_id"), name: "dashboard-github", healthy: true },
+        ],
+      });
+      return;
+    }
+    if (url.pathname === "/v1/connect/proj_dashboard/accounts/apn_dashboard_github" && req.method === "DELETE") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (url.pathname === "/v3") {
+      const app = req.headers["x-pd-app-slug"] || "gmail";
+      send(200, `event: message\ndata: ${JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { tools: [{ name: `${app}-list`, description: `List ${app} records` }, { name: `${app}-create`, description: `Create ${app} record` }] },
+      })}\n\n`, "text/event-stream");
+      return;
+    }
+    send(404, { error: "not_found", path: url.pathname });
+  });
+  await new Promise((resolve) => pipedreamStub.listen(pipedreamPort, "127.0.0.1", resolve));
 
   log("Building control-plane app...");
   await run("pnpm", ["--filter", "@operant/control-plane", "build"], { cwd: repoRoot });
@@ -245,6 +309,14 @@ process.exit(2);
     OPENCLAW_SECRET_RESOLVER_COMMAND: process.execPath,
     OPENCLAW_SECRET_RESOLVER_SCRIPT: path.join(repoRoot, "deploy/openclaw/operant-secret-resolver.mjs"),
     PIPEDREAM_DIAGNOSTICS_TIMEOUT_MS: "200",
+    PIPEDREAM_PROJECT_CLIENT_ID: "dashboard-client-id",
+    PIPEDREAM_PROJECT_CLIENT_SECRET: "dashboard-client-secret",
+    PIPEDREAM_PROJECT_ID: "proj_dashboard",
+    PIPEDREAM_ENVIRONMENT: "development",
+    PIPEDREAM_API_BASE_URL: `http://127.0.0.1:${pipedreamPort}/v1`,
+    PIPEDREAM_OAUTH_TOKEN_URL: `http://127.0.0.1:${pipedreamPort}/v1/oauth/token`,
+    PIPEDREAM_CONNECT_BASE_URL: "https://pipedream.com/_static/connect.html",
+    OPERANT_MCP_SOURCE_PIPEDREAM_URL: `http://127.0.0.1:${pipedreamPort}/v3`,
   };
   const baseUrl = `http://127.0.0.1:${appPort}`;
   spawnManaged(process.execPath, ["apps/control-plane/dist/src/server.js"], { env: appEnv, prefix: "operant" });
@@ -527,6 +599,27 @@ async function runDashboardE2E() {
   });
   await page.waitForText("#policy-result", "allow");
   report.checks.push("policy preview evaluated through dashboard");
+
+  await page.evaluate(`document.querySelector('[data-view-target="integrations-view"]').click()`);
+  await page.waitForText("#pipedream-marketplace-grid", "Gmail");
+  await submitForm(page, "#pipedream-search-form", { q: "github" });
+  await page.waitForText("#pipedream-marketplace-grid", "GitHub");
+  await page.evaluate(`document.querySelector('#pipedream-marketplace-grid [data-app="github"] .pipedream-preview').click()`);
+  try {
+    await page.waitForText("#pipedream-actions", "github-list");
+  } catch (error) {
+    const integrationDebug = await page.evaluate(`(() => ({
+      grid: document.querySelector("#pipedream-marketplace-grid")?.textContent || "",
+      actions: document.querySelector("#pipedream-actions")?.textContent || "",
+      result: document.querySelector("#pipedream-result")?.textContent || "",
+      toast: document.querySelector("#toast")?.textContent || ""
+    }))()`);
+    throw new Error(`${error.message}; integration debug: ${JSON.stringify(integrationDebug)}; console=${JSON.stringify(page.consoleErrors)}; pageErrors=${JSON.stringify(page.pageErrors)}`);
+  }
+  await page.evaluate(`document.querySelector('#pipedream-marketplace-grid [data-app="github"] .pipedream-connect').click()`);
+  await page.waitForText("#pipedream-result", "connectLinkUrl");
+  await page.waitForText("#pipedream-accounts", "dashboard-github");
+  report.checks.push("Pipedream marketplace search, action preview, connect link, and account status rendered");
 
   await page.evaluate(`document.querySelector('[data-view-target="approvals-view"]').click()`);
   await submitForm(page, "#approval-form", {

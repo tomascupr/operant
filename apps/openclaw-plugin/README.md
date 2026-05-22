@@ -12,6 +12,14 @@ npm — distribution is through the Operant gateway image.
 
 - **`operant_ping`** — health check; always registered. Returns
   `{ ok, timestamp }`.
+- **`pipedream_search_apps`** — `{ q?: string, limit?: number }`. Searches the
+  Pipedream app catalog through the Operant control plane so the agent can
+  discover app slugs before connection or action discovery.
+- **`pipedream_connect_app`** — `{ app: string }`. Creates a short-lived
+  Pipedream Connect link for the requesting Slack user. Operant audits the app
+  and expiry but not the token or full URL.
+- **`pipedream_list_connections`** — `{ app?: string }`. Lists the requesting
+  Slack user's connected Pipedream accounts, optionally filtered by app slug.
 - **`pipedream_list_actions`** — `{ app: string }`. Lists Pipedream Connect
   tools for the given app slug (`gmail`, `slack`, `notion`, `github`, …),
   filtered by Operant policy for the requesting Slack user. Pipedream requires
@@ -23,10 +31,9 @@ npm — distribution is through the Operant gateway image.
   - The Pipedream response (often a connect-link URL the user clicks once to
     OAuth their account) otherwise.
 
-`pipedream_list_actions` and `pipedream_run_action` only register when the
-five `PIPEDREAM_*` vars plus `OPERANT_MCP_SOURCE_PIPEDREAM_URL` are set in the
-gateway environment; otherwise the plugin logs a warning and only
-`operant_ping` is exposed.
+The Pipedream tools only register when the five `PIPEDREAM_*` vars plus
+`OPERANT_MCP_SOURCE_PIPEDREAM_URL` are set in the gateway environment;
+otherwise the plugin logs a warning and only `operant_ping` is exposed.
 
 ## Environment
 

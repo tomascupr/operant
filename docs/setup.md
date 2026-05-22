@@ -74,14 +74,16 @@ Use the dashboard tabs left to right for a first deployment:
    acceptance**.
 2. **Health**: confirm workspace settings, config history, and Pipedream
    diagnostics before inviting operators.
-3. **Policy**: edit channels, tool rules, and approval rules with the structured
+3. **Integrations**: search Pipedream apps, connect your own accounts,
+   preview available actions, and revoke connections when needed.
+4. **Policy**: edit channels, tool rules, and approval rules with the structured
    controls; keep the raw JSON editor for full-document edits and advanced
    review.
-4. **People**: add Slack users, assign built-in or custom roles, and create
+5. **People**: add Slack users, assign built-in or custom roles, and create
    custom action/resource permission pairs.
-5. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
+6. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
    sessions/jobs, audit rows, usage events, and model/tool cost breakdowns.
-6. **Data** and **OpenClaw**: run export, wipe, retention purge, config
+7. **Data** and **OpenClaw**: run export, wipe, retention purge, config
    generation, observation sync, and OpenClaw checks only after confirming the
    dashboard dialog for each high-risk action.
 
@@ -92,11 +94,12 @@ SecretRef metadata instead of plaintext.
 ## Pipedream Connect (per-user SaaS tools)
 
 The OpenClaw gateway ships the Operant plugin (`apps/openclaw-plugin`), which
-exposes two MCP-shaped tools the agent can call from Slack:
-`pipedream_list_actions` and `pipedream_run_action`. They bridge to Pipedream
-Connect using a per-Slack-user external id, so each human OAuths their own
-SaaS account once and the audit row pins to that human; not a shared service
-account.
+exposes MCP-shaped tools the agent can call from Slack:
+`pipedream_search_apps`, `pipedream_connect_app`,
+`pipedream_list_connections`, `pipedream_list_actions`, and
+`pipedream_run_action`. They bridge to Pipedream Connect using a
+per-Slack-user external id, so each human OAuths their own SaaS account once
+and the audit row pins to that human; not a shared service account.
 
 The plugin only registers the Pipedream tools when all five vars are present
 in the gateway environment. With any missing, only `operant_ping` registers
@@ -127,11 +130,41 @@ To enable Pipedream tools:
 6. Verify in the gateway log: `Operant 0.1.0 enabled` should appear in
    `docker compose exec openclaw-gateway openclaw plugins list`.
 
-Pipedream requires an explicit `app` slug per call (there is no list-all mode).
-Common slugs: `gmail`, `slack`, `notion`, `github`, `linear`, `hubspot`,
-`google_sheets`. The full catalog is at <https://pipedream.com/apps>.
+Pipedream requires an explicit `app` slug for MCP action discovery. Common
+slugs: `gmail`, `slack`, `notion`, `github`, `linear`, `hubspot`,
+`google_sheets`. The dashboard **Integrations** tab searches the catalog
+through Pipedream and shows connection state for the signed-in Slack user.
 
-Once enabled, a Slack user asks the bot for an action and the flow is:
+### Dashboard self-service
+
+1. Open **Integrations**.
+2. Search for an app or pick one of the curated cards.
+3. Click **Connect**. Operant creates a short-lived Pipedream Connect token
+   for your Slack user id and opens Pipedream's hosted OAuth flow.
+4. Return to Operant and refresh. The app card and **Connected Accounts** table
+   show your connected account.
+5. Use **Preview Actions** to inspect allowed MCP tools after Operant policy is
+   applied.
+6. Click **Disconnect** to revoke the account in Pipedream. Operant verifies
+   the account belongs to your Slack user before deleting it.
+
+Connect links are returned to the browser or Slack thread only for the human
+who requested them. Operant audits the app, Slack user id, outcome, and expiry,
+but not the Connect token or full URL.
+
+### Slack self-service
+
+Once enabled, a Slack user can ask the bot to find and connect apps before
+running actions:
+
+1. Bot calls `pipedream_search_apps {"q": "gmail"}` to find candidate app
+   slugs.
+2. Bot calls `pipedream_connect_app {"app": "gmail"}` to create a connect link
+   for the requesting Slack user.
+3. Bot can call `pipedream_list_connections {"app": "gmail"}` to confirm the
+   user has connected the app.
+
+For execution, the flow is:
 
 1. Bot calls `pipedream_list_actions {"app": "gmail"}`. The plugin filters the
    returned tools through your Operant policy and returns the allowed set as

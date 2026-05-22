@@ -1,8 +1,8 @@
 # Operant docs
 
 - **[setup.md](setup.md)**. Everyday operator path: stack up, dashboard
-  sign-in, Slack app, Pipedream Connect, integration credentials, OpenClaw
-  operator pairing, sandbox overlay.
+  sign-in, Slack app, self-serve Pipedream marketplace, integration
+  credentials, OpenClaw operator pairing, sandbox overlay.
 - **[acceptance.md](acceptance.md)**. Live verifiers, manual human-post
   mode, strict acceptance gates, completion audit. Only needed when
   producing customer acceptance evidence.

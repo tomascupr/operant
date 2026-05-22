@@ -3,8 +3,11 @@ import test from "node:test";
 import type { OperantClient, PolicyDecision, PolicyEffect } from "../src/operant-client.js";
 import type { PipedreamClient, PipedreamToolCallResult, PipedreamToolListing } from "../src/pipedream/client.js";
 import {
+  createPipedreamConnectAppTool,
   createPipedreamListActionsTool,
+  createPipedreamListConnectionsTool,
   createPipedreamRunActionTool,
+  createPipedreamSearchAppsTool,
   deriveAppAction,
   type PipedreamToolDependencies,
 } from "../src/pipedream/tools.js";
@@ -19,6 +22,13 @@ function stubOperantClient(decide: (toolName: string) => PolicyEffect): OperantC
       };
       return decision;
     },
+    searchPipedreamApps: async () => ({ apps: [] }),
+    createPipedreamConnectToken: async (input) => ({
+      app: input.appSlug ?? null,
+      expiresAt: "2026-05-22T12:00:00Z",
+      connectLinkUrl: `https://pipedream.com/_static/connect.html?token=ctok_demo${input.appSlug ? `&app=${input.appSlug}` : ""}`,
+    }),
+    listPipedreamAccounts: async () => ({ accounts: [] }),
   };
 }
 
@@ -93,6 +103,57 @@ test("list_actions returns missing_app when the agent did not pass app", async (
   assert.equal(body.error, "missing_app");
 });
 
+test("search_apps proxies app search through the control plane", async () => {
+  let received: unknown;
+  const tool = createPipedreamSearchAppsTool(deps({
+    operantClient: {
+      ...stubOperantClient(() => "allow"),
+      searchPipedreamApps: async (input) => {
+        received = input;
+        return { apps: [{ id: "app_1", name: "Gmail", slug: "gmail", description: "Email", category: null }] };
+      },
+    },
+  }));
+  const result = await tool.execute("call-1", { q: "gmail", limit: 5 });
+  const body = parseFirstTextBlock(result) as { apps: Array<{ slug: string }> };
+  assert.deepEqual(received, { q: "gmail", limit: 5 });
+  assert.equal(body.apps[0]?.slug, "gmail");
+});
+
+test("connect_app returns a short-lived connect link for the requesting Slack user", async () => {
+  let received: unknown;
+  const tool = createPipedreamConnectAppTool(deps({
+    operantClient: {
+      ...stubOperantClient(() => "allow"),
+      createPipedreamConnectToken: async (input) => {
+        received = input;
+        return { app: "gmail", expiresAt: "2026-05-22T12:00:00Z", connectLinkUrl: "https://pipedream.com/_static/connect.html?token=ctok_demo&app=gmail" };
+      },
+    },
+  }));
+  const result = await tool.execute("call-1", { app: "gmail" });
+  const body = parseFirstTextBlock(result) as { connectLinkUrl: string };
+  assert.deepEqual(received, { slackUserId: "U_alice", appSlug: "gmail" });
+  assert.match(body.connectLinkUrl, /connect\.html\?token=ctok_demo/);
+});
+
+test("list_connections returns the requesting Slack user's Pipedream accounts", async () => {
+  let received: unknown;
+  const tool = createPipedreamListConnectionsTool(deps({
+    operantClient: {
+      ...stubOperantClient(() => "allow"),
+      listPipedreamAccounts: async (input) => {
+        received = input;
+        return { accounts: [{ id: "apn_1", app: "github", appName: "GitHub", externalUserId: "U_alice", name: "alice", healthy: true, createdAt: null, updatedAt: null }] };
+      },
+    },
+  }));
+  const result = await tool.execute("call-1", { app: "github" });
+  const body = parseFirstTextBlock(result) as { accounts: Array<{ app: string }> };
+  assert.deepEqual(received, { slackUserId: "U_alice", app: "github" });
+  assert.equal(body.accounts[0]?.app, "github");
+});
+
 test("run_action forwards to Pipedream with the derived app slug", async () => {
   const pipedreamClient = stubPipedreamClient({ callResult: { content: [{ type: "text", text: "sent" }] } });
   const tool = createPipedreamRunActionTool(deps({ pipedreamClient }));
@@ -151,6 +212,7 @@ test("run_action refuses to call Pipedream without a slackUserId in session cont
     pipedreamClient,
     slackUserId: null,
     operantClient: {
+      ...stubOperantClient(() => "allow"),
       getUserContext: async () => ({ sessionKey: "k", workspaceId: "w", slackUserId: null, roles: [] }),
       checkPolicy: async () => {
         throw new Error("policy should not be checked without a Slack user");
@@ -168,6 +230,7 @@ test("run_action returns policy_check_failed when the control plane policy call 
   const tool = createPipedreamRunActionTool(deps({
     pipedreamClient,
     operantClient: {
+      ...stubOperantClient(() => "allow"),
       getUserContext: async () => ({ sessionKey: "k", workspaceId: "w", slackUserId: "U_alice", roles: [] }),
       checkPolicy: async () => {
         throw new Error("control plane unavailable");

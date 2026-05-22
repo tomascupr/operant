@@ -540,7 +540,15 @@ label {
   gap: 10px;
 }
 
+.marketplace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .pipedream-card,
+.marketplace-card,
 .decision-item,
 .record-card {
   display: grid;
@@ -550,6 +558,23 @@ label {
   border-radius: 8px;
   background: var(--panel-soft);
   padding: 12px;
+}
+
+.marketplace-card {
+  align-content: start;
+}
+
+.marketplace-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(45, 101, 196, 0.12);
+}
+
+.marketplace-card p {
+  min-height: 38px;
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .app-card-header,
@@ -584,6 +609,20 @@ label {
   background: #fff;
 }
 
+.app-letter-tile {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #eef4ff;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .app-card-title strong,
 .app-card-title small,
 .decision-header strong,
@@ -595,6 +634,13 @@ label {
 .app-controls {
   display: grid;
   gap: 10px;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .toggle-row {
@@ -825,12 +871,13 @@ pre {
 
   .nav-tabs {
     display: flex;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow-x: visible;
     gap: 8px;
   }
 
   .nav-tab {
-    flex: 0 0 auto;
+    flex: 1 1 126px;
     width: auto;
     justify-content: center;
     text-align: center;

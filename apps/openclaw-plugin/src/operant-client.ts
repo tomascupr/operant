@@ -18,9 +18,37 @@ export interface PolicyCheckInput {
   action: string;
 }
 
+export interface PipedreamAppSummary {
+  id: string | null;
+  name: string;
+  slug: string;
+  description: string | null;
+  category: string | null;
+}
+
+export interface PipedreamAccountSummary {
+  id: string;
+  app: string | null;
+  appName: string | null;
+  externalUserId: string | null;
+  name: string | null;
+  healthy: boolean | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface PipedreamConnectTokenResult {
+  app: string | null;
+  expiresAt: string | null;
+  connectLinkUrl: string;
+}
+
 export interface OperantClient {
   getUserContext(sessionKey: string): Promise<PluginUserContext>;
   checkPolicy(input: PolicyCheckInput): Promise<PolicyDecision>;
+  searchPipedreamApps(input: { q?: string; limit?: number }): Promise<{ apps: PipedreamAppSummary[]; pageInfo?: Record<string, unknown> | null }>;
+  createPipedreamConnectToken(input: { slackUserId: string; appSlug?: string }): Promise<PipedreamConnectTokenResult>;
+  listPipedreamAccounts(input: { slackUserId: string; app?: string }): Promise<{ accounts: PipedreamAccountSummary[] }>;
 }
 
 export interface OperantClientOptions {
@@ -59,6 +87,15 @@ export function createOperantClient({ baseUrl, token, fetchImpl = fetch }: Opera
     },
     checkPolicy(input) {
       return post<PolicyDecision>("/internal/plugin/policy-check", input);
+    },
+    searchPipedreamApps(input) {
+      return post<{ apps: PipedreamAppSummary[]; pageInfo?: Record<string, unknown> | null }>("/internal/plugin/pipedream/apps", input);
+    },
+    createPipedreamConnectToken(input) {
+      return post<PipedreamConnectTokenResult>("/internal/plugin/pipedream/connect-token", input);
+    },
+    listPipedreamAccounts(input) {
+      return post<{ accounts: PipedreamAccountSummary[] }>("/internal/plugin/pipedream/accounts", input);
     },
   };
 }

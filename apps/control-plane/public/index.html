@@ -29,6 +29,7 @@
         <nav class="nav-tabs">
           <button type="button" class="nav-tab active" data-view-target="setup-view">Setup</button>
           <button type="button" class="nav-tab" data-view-target="health-view">Health</button>
+          <button type="button" class="nav-tab" data-view-target="integrations-view">Integrations</button>
           <button type="button" class="nav-tab" data-view-target="policy-view">Policy</button>
           <button type="button" class="nav-tab" data-view-target="people-view">People</button>
           <button type="button" class="nav-tab" data-view-target="approvals-view">Approvals</button>
@@ -178,6 +179,54 @@
               </div>
             </div>
             <div id="pipedream-diagnostics" class="diagnostic-panel">Sign in to view Pipedream diagnostics.</div>
+          </section>
+        </section>
+
+        <section id="integrations-view" class="view" aria-labelledby="integrations-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="integrations-title">Integrations</h2>
+              <p>Search Pipedream apps, connect your own accounts, and preview agent actions.</p>
+            </div>
+            <div class="actions">
+              <button id="refresh-integrations" type="button" class="secondary-button">Refresh</button>
+            </div>
+          </div>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>App Marketplace</h3>
+                <p>Connections are scoped to the signed-in Slack user and executed through Pipedream Connect.</p>
+              </div>
+              <span id="pipedream-marketplace-state" class="status-pill pending">Waiting</span>
+            </div>
+            <form id="pipedream-search-form" class="inline-form compact-form">
+              <label>Search apps<input name="q" placeholder="gmail, github, notion" /></label>
+              <button type="submit">Search</button>
+            </form>
+            <div id="pipedream-marketplace-grid" class="marketplace-grid">Sign in to browse integrations.</div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Connected Accounts</h3>
+                <p>Review or revoke the accounts Operant can use on your behalf.</p>
+              </div>
+            </div>
+            <div id="pipedream-accounts" class="table-surface">Sign in to view connected accounts.</div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Action Preview</h3>
+                <p>Available actions reflect Operant policy for the selected app.</p>
+              </div>
+            </div>
+            <div id="pipedream-actions" class="table-surface">Select an app to preview actions.</div>
+            <div id="pipedream-result" class="result-surface"></div>
           </section>
         </section>
 

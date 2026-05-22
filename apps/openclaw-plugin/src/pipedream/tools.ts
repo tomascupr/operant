@@ -24,6 +24,28 @@ const ListActionsParameters = Type.Object(
   { additionalProperties: false },
 );
 
+const SearchAppsParameters = Type.Object(
+  {
+    q: Type.Optional(Type.String({ description: "Search query for Pipedream apps, e.g. gmail, notion, github." })),
+    limit: Type.Optional(Type.Number({ description: "Maximum number of apps to return, up to 50." })),
+  },
+  { additionalProperties: false },
+);
+
+const ConnectAppParameters = Type.Object(
+  {
+    app: Type.String({ description: "Pipedream app slug to connect, e.g. gmail, notion, github." }),
+  },
+  { additionalProperties: false },
+);
+
+const ListConnectionsParameters = Type.Object(
+  {
+    app: Type.Optional(Type.String({ description: "Optional Pipedream app slug to filter connections." })),
+  },
+  { additionalProperties: false },
+);
+
 const RunActionParameters = Type.Object(
   {
     toolName: Type.String({ description: "The Pipedream tool to invoke, e.g. \"gmail-send-email\"." }),
@@ -75,6 +97,59 @@ export function createPipedreamListActionsTool(deps: PipedreamToolDependencies) 
           : [],
       );
       return jsonResult({ app, tools });
+    },
+  };
+}
+
+export function createPipedreamSearchAppsTool(deps: PipedreamToolDependencies) {
+  return {
+    name: "pipedream_search_apps",
+    label: "Search Pipedream Apps",
+    description: "Search the Pipedream Connect app catalog. Use this before asking a Slack user to connect an app or before discovering app actions.",
+    parameters: SearchAppsParameters,
+    execute: async (_toolCallId: string, rawParams: unknown) => {
+      const params = rawParams as { q?: unknown; limit?: unknown };
+      const q = typeof params.q === "string" && params.q.trim() ? params.q.trim() : undefined;
+      const limit = typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.min(Math.max(Math.trunc(params.limit), 1), 50)
+        : 20;
+      const result = await deps.operantClient.searchPipedreamApps({ q, limit });
+      return jsonResult(result);
+    },
+  };
+}
+
+export function createPipedreamConnectAppTool(deps: PipedreamToolDependencies) {
+  return {
+    name: "pipedream_connect_app",
+    label: "Connect Pipedream App",
+    description: "Create a short-lived Pipedream Connect link for the requesting Slack user to OAuth a SaaS account.",
+    parameters: ConnectAppParameters,
+    execute: async (_toolCallId: string, rawParams: unknown) => {
+      if (!deps.slackUserId) return jsonResult({ error: "missing_slack_user_context" });
+      const params = rawParams as { app?: unknown };
+      const app = typeof params.app === "string" ? params.app.trim() : "";
+      if (!app) return jsonResult({ error: "missing_app" });
+      const result = await deps.operantClient.createPipedreamConnectToken({ slackUserId: deps.slackUserId, appSlug: app })
+        .catch((error) => ({ error: "connect_token_failed", message: error instanceof Error ? error.message : "unknown error" }));
+      return jsonResult(result);
+    },
+  };
+}
+
+export function createPipedreamListConnectionsTool(deps: PipedreamToolDependencies) {
+  return {
+    name: "pipedream_list_connections",
+    label: "List Pipedream Connections",
+    description: "List the requesting Slack user's connected Pipedream accounts, optionally filtered by app slug.",
+    parameters: ListConnectionsParameters,
+    execute: async (_toolCallId: string, rawParams: unknown) => {
+      if (!deps.slackUserId) return jsonResult({ error: "missing_slack_user_context" });
+      const params = rawParams as { app?: unknown };
+      const app = typeof params.app === "string" && params.app.trim() ? params.app.trim() : undefined;
+      const result = await deps.operantClient.listPipedreamAccounts({ slackUserId: deps.slackUserId, app })
+        .catch((error) => ({ error: "connections_lookup_failed", message: error instanceof Error ? error.message : "unknown error" }));
+      return jsonResult(result);
     },
   };
 }

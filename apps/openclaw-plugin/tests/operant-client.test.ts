@@ -56,6 +56,33 @@ test("checkPolicy forwards slackUserId, tool, action and returns the decision", 
   });
 });
 
+test("Pipedream helper methods call the internal marketplace endpoints", async () => {
+  const urls: string[] = [];
+  await withJsonStub((req) => {
+    urls.push(req.url || "");
+    if (req.url === "/internal/plugin/pipedream/apps") {
+      return { status: 200, body: { apps: [{ name: "Gmail", slug: "gmail" }] } };
+    }
+    if (req.url === "/internal/plugin/pipedream/connect-token") {
+      return { status: 200, body: { app: "gmail", expiresAt: null, connectLinkUrl: "https://pipedream.com/_static/connect.html?token=ctok_demo&app=gmail" } };
+    }
+    if (req.url === "/internal/plugin/pipedream/accounts") {
+      return { status: 200, body: { accounts: [{ id: "apn_1", app: "gmail" }] } };
+    }
+    return { status: 404, body: { error: "missing" } };
+  }, async (baseUrl) => {
+    const client = createOperantClient({ baseUrl, token: "t" });
+    assert.equal((await client.searchPipedreamApps({ q: "gmail" })).apps[0]?.slug, "gmail");
+    assert.match((await client.createPipedreamConnectToken({ slackUserId: "U1", appSlug: "gmail" })).connectLinkUrl, /ctok_demo/);
+    assert.equal((await client.listPipedreamAccounts({ slackUserId: "U1", app: "gmail" })).accounts[0]?.id, "apn_1");
+  });
+  assert.deepEqual(urls, [
+    "/internal/plugin/pipedream/apps",
+    "/internal/plugin/pipedream/connect-token",
+    "/internal/plugin/pipedream/accounts",
+  ]);
+});
+
 test("non-2xx responses throw OperantClientError", async () => {
   await withJsonStub(() => ({ status: 403, body: { error: "Forbidden" } }), async (baseUrl) => {
     const client = createOperantClient({ baseUrl, token: "wrong" });

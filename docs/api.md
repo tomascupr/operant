@@ -59,6 +59,20 @@ write. Reads return only existence metadata.
 | GET    | `/api/integrations/credentials`   | session | List per-tool credential metadata (kind, key, scope, last-resolved-at) for the dashboard.   |
 | POST   | `/api/integrations/credentials`   | session | Upsert a per-workspace or per-Slack-user tool credential (e.g. `github/api-token`).         |
 
+## Pipedream marketplace
+
+These routes power the self-serve Integrations tab. They require the five
+Pipedream env vars from `.env.example`. Connect links are returned to the
+requesting user but never persisted in audit metadata.
+
+| Method | Path                                                         | Auth    | Purpose                                                                 |
+| ------ | ------------------------------------------------------------ | ------- | ----------------------------------------------------------------------- |
+| GET    | `/api/integrations/pipedream/apps?q=&limit=&after=`          | session | Search/list the Pipedream app catalog.                                  |
+| GET    | `/api/integrations/pipedream/accounts?app=`                  | session | List the signed-in Slack user's connected Pipedream accounts.           |
+| GET    | `/api/integrations/pipedream/apps/{slug}/actions`            | session | Preview MCP actions for an app, filtered through Operant tool policy.   |
+| POST   | `/api/integrations/pipedream/connect-token`                  | session | Create a short-lived Pipedream Connect link for the signed-in user.     |
+| DELETE | `/api/integrations/pipedream/accounts/{account_id}`          | session | Revoke one of the signed-in user's connected Pipedream accounts.        |
+
 ## OpenClaw config & operator checks
 
 Operant generates `openclaw.json` and ships it to the gateway over a
@@ -135,6 +149,9 @@ decisions and user context. The control plane verifies the bearer with
 | POST   | `/internal/openclaw/events`                | Ingest OpenClaw lifecycle events (session start/stop, tool invocation, approval requested).      |
 | POST   | `/internal/plugin/user-context`            | Fetch context for the calling Slack user: roles, allowed channels, tool entitlements.            |
 | POST   | `/internal/plugin/policy-check`            | Plugin asks "can this Slack user do `tool/action` in `channel`?" — same engine as `/api/policy/evaluate`. |
+| POST   | `/internal/plugin/pipedream/apps`          | Plugin searches the Pipedream app catalog for Slack self-service.                                |
+| POST   | `/internal/plugin/pipedream/connect-token` | Plugin creates a Pipedream Connect link for the requesting Slack user.                           |
+| POST   | `/internal/plugin/pipedream/accounts`      | Plugin lists the requesting Slack user's connected Pipedream accounts.                           |
 
 `SecretRef IDs` follow `workspaces/<workspaceId>/<path>` for shared
 secrets and `workspaces/<workspaceId>/users/<slackUserId>/<path>` for

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z, ZodError } from "zod";
 import { createSessionToken, hashSessionToken, readBearerToken } from "./auth.js";
+import { createRateLimiter } from "./rate-limit.js";
 import { createPool, runMigrations, type Database } from "./db.js";
 import { checksumConfig, generateOpenClawConfig, buildSecretRefId, gatewayWebSocketUrl, parseSecretRefId } from "./openclaw-config.js";
 import {
@@ -131,9 +132,42 @@ function responseHeaders(contentType: string): Record<string, string> {
   };
 }
 
-function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
-  res.writeHead(statusCode, responseHeaders("application/json; charset=utf-8"));
+function sendJson(res: ServerResponse, statusCode: number, payload: unknown, extraHeaders?: Record<string, string>): void {
+  res.writeHead(statusCode, { ...responseHeaders("application/json; charset=utf-8"), ...extraHeaders });
   res.end(JSON.stringify(payload, null, 2));
+}
+
+// Throttle failed admin-login attempts per client IP to blunt brute-forcing of
+// OPERANT_ADMIN_LOGIN_TOKEN. Counts only failures; a successful login resets.
+const authRateLimit = createRateLimiter({ maxFailures: 10, windowMs: 15 * 60 * 1000 });
+
+// Immediate TCP peer. X-Forwarded-For is not trusted by default (spoofable);
+// behind a reverse proxy this collapses to the proxy address, which still
+// bounds the brute-force rate.
+function clientIp(req: IncomingMessage): string {
+  return req.socket.remoteAddress ?? "unknown";
+}
+
+// Sends 429 (+ Retry-After) and audits a deny when the IP is over the failed-auth
+// limit. Returns true when throttled so callers can `if (...) return;`.
+async function enforceAuthRateLimit(
+  context: RouteContext,
+  workspace: { id: string; company_id: string },
+  ip: string,
+  fields: { eventType: string; resourceType: string; error: string },
+): Promise<boolean> {
+  const limited = authRateLimit.isLimited(ip);
+  if (!limited.limited) return false;
+  await audit(context.state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    eventType: fields.eventType,
+    resourceType: fields.resourceType,
+    outcome: "deny",
+    metadata: { ip },
+  });
+  sendJson(context.res, 429, { error: fields.error }, { "retry-after": String(limited.retryAfterSeconds) });
+  return true;
 }
 
 function sendText(res: ServerResponse, statusCode: number, payload: string, contentType = "text/plain; charset=utf-8"): void {
@@ -730,6 +764,12 @@ async function handleBootstrap({ req, res, state }: RouteContext): Promise<void>
 async function handleAuthLogin(context: RouteContext): Promise<void> {
   const { req, res, state } = context;
   const workspace = await getWorkspace(state.pool);
+  const ip = clientIp(req);
+  if (await enforceAuthRateLimit(context, workspace, ip, {
+    eventType: "auth.login_rate_limited",
+    resourceType: "admin_session",
+    error: "Too many failed login attempts. Try again later.",
+  })) return;
   const rawBody = await readJson(req);
   const body = z.object({
     slackUserId: slackIdSchema,
@@ -745,6 +785,7 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       outcome: "deny",
       metadata: { slackUserId: body.slackUserId, reason: "admin_login_token" },
     });
+    if (adminToken.statusCode === 401) authRateLimit.recordFailure(ip);
     sendJson(res, adminToken.statusCode, { error: adminToken.error });
     return;
   }
@@ -774,6 +815,7 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       outcome: "deny",
       metadata: { slackUserId: body.slackUserId, code },
     });
+    authRateLimit.recordFailure(ip);
     sendJson(res, 403, {
       error: bootstrapRequired ? "Workspace not bootstrapped" : "No Operant role assignment for Slack user",
       code,
@@ -800,6 +842,7 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       resourceId: session.rows[0].id,
     });
     await client.query("COMMIT");
+    authRateLimit.reset(ip);
     sendJson(res, 200, {
       token,
       sessionId: session.rows[0].id,

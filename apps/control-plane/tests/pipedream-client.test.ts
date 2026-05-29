@@ -73,7 +73,7 @@ test("lists apps and normalizes Pipedream app fields", async () => {
 test("creates connect links without requiring the caller to build Pipedream URLs", async () => {
   const { fetchImpl, calls } = stubFetch((url) => {
     if (url.pathname === "/v1/oauth/token") return jsonResponse({ access_token: "pd-token", expires_in: 3600 });
-    assert.equal(url.pathname, "/v1/connect/tokens");
+    assert.equal(url.pathname, "/v1/connect/proj_test/tokens");
     return jsonResponse({ token: "ctok_demo", expires_at: "2026-05-22T12:00:00Z" });
   });
 

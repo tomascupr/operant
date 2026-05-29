@@ -288,7 +288,8 @@ export function createPipedreamConnectClient(options: PipedreamConnectClientOpti
       return pageItems(body).map(normalizeAccount).filter((account): account is PipedreamAccount => Boolean(account));
     },
     async createConnectToken(input) {
-      const body = await requestJson<unknown>("/connect/tokens", {
+      const tokensPath = `/connect/${encodeURIComponent(options.projectId)}/tokens`;
+      const body = await requestJson<unknown>(tokensPath, {
         method: "POST",
         body: JSON.stringify({
           user_id: input.externalUserId,
@@ -298,7 +299,7 @@ export function createPipedreamConnectClient(options: PipedreamConnectClientOpti
       });
       const root = asRecord(body);
       const token = firstString(root?.token, root?.connect_token, root?.connectToken);
-      if (!token) throw new PipedreamConnectClientError(`${apiBaseUrl}/connect/tokens`, 200, "missing token in response");
+      if (!token) throw new PipedreamConnectClientError(`${apiBaseUrl}${tokensPath}`, 200, "missing token in response");
       const providedUrl = firstString(root?.connect_link_url, root?.connectLinkUrl);
       const connectUrl = new URL(providedUrl ?? connectBaseUrl);
       connectUrl.searchParams.set("token", token);

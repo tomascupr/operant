@@ -1329,6 +1329,26 @@ async function handlePipedreamConnectToken(context: RouteContext): Promise<void>
     return;
   }
   const body = z.object({ appSlug: pipedreamAppSlugSchema.optional() }).parse(await readJson(req));
+  // Gate which app a user may connect by tool policy (the connect token is not
+  // app-bound at the Pipedream API, so authorization must happen here). Mirrors
+  // the plugin connect path so the public and plugin surfaces enforce the same rule.
+  if (body.appSlug) {
+    const toolPolicies = await loadToolPolicies(state.pool, workspace.id);
+    const decision = evaluateToolOnly({ tool: `pipedream:${body.appSlug}`, action: "*" }, { toolPolicies });
+    if (decision.effect === "deny") {
+      await audit(state.pool, {
+        companyId: workspace.company_id,
+        workspaceId: workspace.id,
+        actorUserId: allowed.actorUserId,
+        eventType: "pipedream.connect_token_denied",
+        resourceType: "pipedream_account",
+        outcome: "deny",
+        metadata: { app: body.appSlug, slackUserId: allowed.actorSlackUserId, reasons: decision.reasons },
+      });
+      sendJson(res, 403, { error: "policy_denied", reasons: decision.reasons });
+      return;
+    }
+  }
   const client = pipedreamClientForResponse(res);
   if (!client) return;
   const token = await client.createConnectToken({
@@ -2929,13 +2949,73 @@ async function handleExport(context: RouteContext): Promise<void> {
   }
 }
 
+// Revokes wiped users' Pipedream-connected accounts upstream (their OAuth grants
+// live on Pipedream, not in Postgres, so the SQL wipe alone leaves them active).
+// Network calls, kept OUT of the DB transaction; per-account failures are audited
+// and returned rather than silently swallowed. No-op when Pipedream is unconfigured.
+export async function revokePipedreamAccountsForWorkspace(
+  pool: Queryable,
+  workspace: { id: string; company_id: string },
+  slackUserIds: string[],
+  client: PipedreamConnectClient | null,
+): Promise<{ configured: boolean; revoked: number; failures: Array<{ slackUserId: string; accountId?: string; error: string }> }> {
+  if (!client || slackUserIds.length === 0) return { configured: Boolean(client), revoked: 0, failures: [] };
+  let revoked = 0;
+  const failures: Array<{ slackUserId: string; accountId?: string; error: string }> = [];
+  for (const slackUserId of slackUserIds) {
+    let accounts;
+    try {
+      accounts = await client.listAccounts({ externalUserId: slackUserId });
+    } catch (error) {
+      failures.push({ slackUserId, error: error instanceof Error ? error.message : "list_failed" });
+      continue;
+    }
+    for (const account of accounts) {
+      try {
+        await client.deleteAccount(account.id);
+        revoked += 1;
+        await audit(pool, {
+          companyId: workspace.company_id,
+          workspaceId: workspace.id,
+          eventType: "pipedream.account_revoked",
+          resourceType: "pipedream_account",
+          resourceId: account.id,
+          metadata: { slackUserId, app: account.app, reason: "wipe" },
+        });
+      } catch (error) {
+        failures.push({ slackUserId, accountId: account.id, error: error instanceof Error ? error.message : "delete_failed" });
+      }
+    }
+  }
+  if (failures.length > 0) {
+    await audit(pool, {
+      companyId: workspace.company_id,
+      workspaceId: workspace.id,
+      eventType: "pipedream.revocation_failed",
+      resourceType: "pipedream_account",
+      outcome: "deny",
+      metadata: { reason: "wipe", failures },
+    });
+  }
+  return { configured: true, revoked, failures };
+}
+
 async function handleWipe(context: RouteContext): Promise<void> {
   const { req, res, state } = context;
   const workspace = await getWorkspace(state.pool);
   const allowed = await requirePermissionForWorkspace(context, workspace, { action: "data:wipe", resource: "retention" });
   if (!allowed.ok) return;
   const body = z.object({ scope: z.enum(retentionWipeScopes) }).parse(await readJson(req));
+  // Capture connected users before the SQL wipe removes them, so their Pipedream
+  // grants can be revoked upstream afterwards (a full workspace wipe only).
+  const slackUserIds = body.scope === "workspace"
+    ? (await state.pool.query(
+        "SELECT DISTINCT slack_user_id FROM users WHERE company_id = $1 AND slack_user_id IS NOT NULL",
+        [workspace.company_id],
+      )).rows.map((row) => row.slack_user_id as string)
+    : [];
   const client = await state.pool.connect();
+  let result;
   try {
     await client.query("BEGIN");
     const request = await client.query(
@@ -2962,13 +3042,15 @@ async function handleWipe(context: RouteContext): Promise<void> {
       metadata: { scope: body.scope, deleted },
     });
     await client.query("COMMIT");
-    sendJson(res, 200, updated.rows[0]);
+    result = updated.rows[0];
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
+  const pipedreamRevocation = await revokePipedreamAccountsForWorkspace(state.pool, workspace, slackUserIds, createPipedreamConnectClientFromEnv());
+  sendJson(res, 200, { ...result, pipedreamRevocation });
 }
 
 async function handleRetentionPurge(context: RouteContext): Promise<void> {

@@ -55,7 +55,11 @@ Slack ──> OpenClaw gateway ──> Operant policy + audit ──> Postgres
 Slack app tokens, bot tokens, and model API keys live AES-256-GCM
 encrypted in your Postgres. Per-user tool OAuth (Gmail / Notion / GitHub
 / ...) is held by [Pipedream Connect](https://pipedream.com/docs/connect)
-under each Slack user's external ID. Custom non-Pipedream tool
+under each Slack user's external ID. Pipedream is a third-party
+sub-processor: those end-user OAuth tokens live in Pipedream's own
+infrastructure, outside your Operant/Postgres trust boundary. Operant
+governs and audits that access; it does not store those tokens. See
+[docs/compliance.md](docs/compliance.md). Custom non-Pipedream tool
 credentials can also be stored encrypted in your Postgres, scoped to the
 workspace or to a specific Slack user.
 

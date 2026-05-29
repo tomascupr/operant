@@ -102,6 +102,13 @@ exposes MCP-shaped tools the agent can call from Slack:
 per-Slack-user external id, so each human OAuths their own SaaS account once
 and the audit row pins to that human; not a shared service account.
 
+Pipedream Connect is a third-party sub-processor. The end-user OAuth grants
+it brokers are stored in Pipedream's own infrastructure, outside your
+Operant/Postgres trust boundary; Operant governs and audits that access but
+never stores those tokens. The dashboard surfaces this at connect time, and
+[compliance.md](compliance.md) records the sub-processor boundary, region,
+and the two-actor audit semantics.
+
 The plugin only registers the Pipedream tools when all five vars are present
 in the gateway environment. With any missing, only `operant_ping` registers
 and the gateway boot log prints which vars are absent.

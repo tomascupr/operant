@@ -43,6 +43,16 @@ Out of scope:
   respective projects; we will mirror an advisory if Operant exposes the
   defect in a non-default way.
 
+## Data residency and sub-processors
+
+Operant stores Slack/model credentials and custom tool secrets AES-256-GCM
+encrypted in your Postgres. When Pipedream Connect is used, the end-user
+OAuth tokens it brokers are held in Pipedream's own infrastructure, outside
+the Operant trust boundary; Operant governs and audits that access but does
+not store those tokens. The sub-processor boundary, region, and the
+two-actor audit semantics are documented in
+[docs/compliance.md](docs/compliance.md).
+
 ## Known transitive issues
 
 - `ws@8.20.0` — [GHSA-58qx-3vcg-4xpx](https://github.com/advisories/GHSA-58qx-3vcg-4xpx),

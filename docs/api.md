@@ -63,7 +63,11 @@ write. Reads return only existence metadata.
 
 These routes power the self-serve Integrations tab. They require the five
 Pipedream env vars from `.env.example`. Connect links are returned to the
-requesting user but never persisted in audit metadata.
+requesting user but never persisted in audit metadata. Pipedream is a
+third-party sub-processor that stores the brokered end-user OAuth tokens
+outside the Operant trust boundary; connect/invocation audit rows carry the
+Slack principal in `actor_slack_user_id` for attestation. See
+[compliance.md](compliance.md).
 
 | Method | Path                                                         | Auth    | Purpose                                                                 |
 | ------ | ------------------------------------------------------------ | ------- | ----------------------------------------------------------------------- |

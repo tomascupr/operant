@@ -1,5 +1,6 @@
 import type {
   ApprovalPolicyRecord,
+  ChatPlatform,
   ChannelPolicyRecord,
   PolicyDecision,
   PolicyEvaluationInput,
@@ -21,50 +22,79 @@ export function evaluateToolOnly(input: { tool: string; action: string }, polici
   return { effect: "allow", reasons: allowed ? [`Tool policy allows ${input.tool}:${input.action}.`] : [] };
 }
 
+function inputPlatform(input: PolicyEvaluationInput): ChatPlatform {
+  return input.channelType ?? "slack";
+}
+
+function inputPrincipalId(input: PolicyEvaluationInput): string {
+  if (inputPlatform(input) === "msteams") return input.teamsAadUserId ?? input.principalId ?? "";
+  return input.slackUserId ?? input.principalId ?? "";
+}
+
+function inputChannelId(input: PolicyEvaluationInput): string | undefined {
+  if (inputPlatform(input) === "msteams") return input.teamsChannelId ?? input.slackChannelId;
+  return input.slackChannelId;
+}
+
 export function evaluatePolicy(input: PolicyEvaluationInput, policies: {
   allowedDmUserIds: string[];
+  allowedTeamsDmUserIds?: string[];
   channelPolicies: ChannelPolicyRecord[];
   toolPolicies: ToolPolicyRecord[];
 }): PolicyDecision {
   const reasons: string[] = [];
+  const platform = inputPlatform(input);
+  const principalId = inputPrincipalId(input);
+  const platformLabel = platform === "msteams" ? "Teams" : "Slack";
+  const dmAllowlist = platform === "msteams" ? policies.allowedTeamsDmUserIds ?? [] : policies.allowedDmUserIds;
 
   if (input.chatType === "direct") {
-    if (!policies.allowedDmUserIds.includes(input.slackUserId)) {
+    if (!dmAllowlist.includes(principalId)) {
       return {
         effect: "deny",
-        reasons: [`Slack user ${input.slackUserId} is not in the DM allowlist.`],
+        reasons: [`${platformLabel} user ${principalId} is not in the DM allowlist.`],
       };
     }
-    reasons.push("Slack user is DM-allowlisted.");
+    reasons.push(`${platformLabel} user is DM-allowlisted.`);
   }
 
   if (input.chatType !== "direct") {
-    const channel = policies.channelPolicies.find((candidate) => candidate.channelId === input.slackChannelId);
+    const channelId = inputChannelId(input);
+    const channel = policies.channelPolicies.find((candidate) => {
+      const candidatePlatform = candidate.channelType ?? "slack";
+      if (candidatePlatform !== platform) return false;
+      if (candidate.channelId !== channelId) return false;
+      if (platform === "msteams") {
+        if (!candidate.teamId || !input.teamId) return false;
+        return candidate.teamId === input.teamId;
+      }
+      return true;
+    });
     if (!channel) {
       return {
         effect: "deny",
-        reasons: [`Slack channel ${input.slackChannelId ?? "<missing>"} is not allowlisted.`],
+        reasons: [`${platformLabel} channel ${channelId ?? "<missing>"} is not allowlisted.`],
       };
     }
     if (!channel.enabled) {
       return {
         effect: "deny",
-        reasons: [`Slack channel ${channel.channelId} is disabled.`],
+        reasons: [`${platformLabel} channel ${channel.channelId} is disabled.`],
       };
     }
-    if (channel.deniedUserIds.includes(input.slackUserId)) {
+    if (channel.deniedUserIds.includes(principalId)) {
       return {
         effect: "deny",
-        reasons: [`Slack user ${input.slackUserId} is denied in channel ${channel.channelId}.`],
+        reasons: [`${platformLabel} user ${principalId} is denied in channel ${channel.channelId}.`],
       };
     }
-    if (channel.allowedUserIds.length > 0 && !channel.allowedUserIds.includes(input.slackUserId)) {
+    if (channel.allowedUserIds.length > 0 && !channel.allowedUserIds.includes(principalId)) {
       return {
         effect: "deny",
-        reasons: [`Slack user ${input.slackUserId} is not allowlisted in channel ${channel.channelId}.`],
+        reasons: [`${platformLabel} user ${principalId} is not allowlisted in channel ${channel.channelId}.`],
       };
     }
-    reasons.push(`Slack channel ${channel.channelId} is allowlisted.`);
+    reasons.push(`${platformLabel} channel ${channel.channelId} is allowlisted.`);
   }
 
   if (input.tool) {
@@ -76,20 +106,20 @@ export function evaluatePolicy(input: PolicyEvaluationInput, policies: {
     if (denied) {
       return {
         effect: "deny",
-        reasons: [`Tool policy denies ${input.tool}:${input.action} for this Slack user or role.`],
+        reasons: [`Tool policy denies ${input.tool}:${input.action} for this chat user or role.`],
       };
     }
     if (applicableToolPolicies.some((policy) => policy.effect === "approval_required")) {
       return {
         effect: "approval_required",
-        reasons: [...reasons, `Tool policy requires approval for ${input.tool}:${input.action} for this Slack user or role.`],
+        reasons: [...reasons, `Tool policy requires approval for ${input.tool}:${input.action} for this chat user or role.`],
       };
     }
-    if (applicableToolPolicies.some((policy) => policy.effect === "allow")) reasons.push(`Tool policy allows ${input.tool}:${input.action} for this Slack user or role.`);
+    if (applicableToolPolicies.some((policy) => policy.effect === "allow")) reasons.push(`Tool policy allows ${input.tool}:${input.action} for this chat user or role.`);
     if (applicableToolPolicies.length === 0 && matchingToolPolicies.some(isScopedGrantPolicy)) {
       return {
         effect: "deny",
-        reasons: [`Slack user ${input.slackUserId} has no role or user entitlement for ${input.tool}:${input.action}.`],
+        reasons: [`${platformLabel} user ${principalId} has no role or user entitlement for ${input.tool}:${input.action}.`],
       };
     }
   }
@@ -98,7 +128,7 @@ export function evaluatePolicy(input: PolicyEvaluationInput, policies: {
 }
 
 function isScopedToolPolicy(policy: ToolPolicyRecord): boolean {
-  return (policy.slackUserIds ?? []).length > 0 || (policy.roleNames ?? []).length > 0;
+  return (policy.slackUserIds ?? []).length > 0 || (policy.teamsAadUserIds ?? []).length > 0 || (policy.roleNames ?? []).length > 0;
 }
 
 function isScopedGrantPolicy(policy: ToolPolicyRecord): boolean {
@@ -107,7 +137,12 @@ function isScopedGrantPolicy(policy: ToolPolicyRecord): boolean {
 
 function toolPolicyAppliesToUser(policy: ToolPolicyRecord, input: PolicyEvaluationInput): boolean {
   if (!isScopedToolPolicy(policy)) return true;
-  if ((policy.slackUserIds ?? []).includes(input.slackUserId)) return true;
+  const principalId = inputPrincipalId(input);
+  if (inputPlatform(input) === "msteams") {
+    if ((policy.teamsAadUserIds ?? []).includes(principalId)) return true;
+  } else if ((policy.slackUserIds ?? []).includes(principalId)) {
+    return true;
+  }
   const userRoles = new Set(input.userRoleNames ?? []);
   return (policy.roleNames ?? []).some((roleName) => userRoles.has(roleName));
 }
@@ -137,10 +172,12 @@ export function summarizeApprovalRequirement(input: { action: string; resource: 
 }) {
   const matchingPolicies = matchingApprovalPolicies(input, policies);
   const approverSlackUserIds = Array.from(new Set(matchingPolicies.flatMap((policy) => policy.approverSlackUserIds)));
+  const approverTeamsUserIds = Array.from(new Set(matchingPolicies.flatMap((policy) => policy.approverTeamsUserIds ?? [])));
   return {
     matchedPolicyCount: matchingPolicies.length,
     policyNames: matchingPolicies.map((policy) => policy.name),
     approverSlackUserIds,
+    approverTeamsUserIds,
     minApprovals: matchingPolicies.length > 0 ? Math.max(...matchingPolicies.map((policy) => policy.minApprovals)) : 1,
   };
 }

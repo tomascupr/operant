@@ -207,6 +207,49 @@ test("approval requirements summarize matching approval policies", () => {
     matchedPolicyCount: 1,
     policyNames: ["exec approvals"],
     approverSlackUserIds: ["UADMIN"],
+    approverTeamsUserIds: [],
     minApprovals: 1,
   });
+});
+
+const AAD_A = "11111111-1111-4111-8111-111111111111";
+const AAD_B = "22222222-2222-4222-8222-222222222222";
+
+const teamsPolicies = {
+  allowedDmUserIds: ["U1"],
+  allowedTeamsDmUserIds: [AAD_A],
+  channelPolicies: [
+    { channelType: "msteams" as const, teamId: "teamA", channelId: "chan1", enabled: true, requireMention: true, allowedUserIds: [AAD_A], deniedUserIds: [] },
+  ],
+  toolPolicies: [
+    { tool: "github", action: "*", effect: "allow" as const, teamsAadUserIds: [AAD_A] },
+  ],
+};
+
+test("Teams DM uses the Teams allowlist, not the Slack one", () => {
+  const allowed = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_A, chatType: "direct", action: "message", resource: "msteams" }, teamsPolicies);
+  assert.equal(allowed.effect, "allow");
+  const denied = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_B, chatType: "direct", action: "message", resource: "msteams" }, teamsPolicies);
+  assert.equal(denied.effect, "deny");
+});
+
+test("Teams channel policy isolates by team: same channelId in another team does not match", () => {
+  const sameTeam = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_A, teamsChannelId: "chan1", teamId: "teamA", chatType: "channel", action: "message", resource: "msteams" }, teamsPolicies);
+  assert.equal(sameTeam.effect, "allow");
+  const otherTeam = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_A, teamsChannelId: "chan1", teamId: "teamB", chatType: "channel", action: "message", resource: "msteams" }, teamsPolicies);
+  assert.equal(otherTeam.effect, "deny");
+});
+
+test("a Slack channel policy never matches a Teams evaluation with the same channel id", () => {
+  const decision = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_A, teamsChannelId: "C1", teamId: "teamA", chatType: "channel", action: "message", resource: "msteams" }, policies);
+  assert.equal(decision.effect, "deny");
+});
+
+test("Teams tool scoping grants the entitled AAD user and denies others", () => {
+  // Both users clear the DM gate so only the tool entitlement differentiates them.
+  const scoped = { ...teamsPolicies, allowedTeamsDmUserIds: [AAD_A, AAD_B] };
+  const entitled = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_A, chatType: "direct", tool: "github", action: "list", resource: "msteams" }, scoped);
+  assert.equal(entitled.effect, "allow");
+  const other = evaluatePolicy({ channelType: "msteams", teamsAadUserId: AAD_B, chatType: "direct", tool: "github", action: "list", resource: "msteams" }, scoped);
+  assert.equal(other.effect, "deny");
 });

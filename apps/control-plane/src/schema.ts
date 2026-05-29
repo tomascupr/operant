@@ -172,16 +172,40 @@ export const pluginPolicyCheckRequestSchema = z.object({
 export type PluginPolicyCheckRequest = z.infer<typeof pluginPolicyCheckRequestSchema>;
 
 export const policyEvaluationSchema = z.object({
-  slackUserId: slackIdSchema,
+  channelType: z.enum(chatPlatforms).default("slack"),
+  slackUserId: slackIdSchema.optional(),
+  teamsAadUserId: teamsAadUserIdSchema.optional(),
+  principalId: chatPrincipalIdSchema.optional(),
   slackChannelId: slackIdSchema.optional(),
+  teamsChannelId: teamsConversationIdSchema.optional(),
+  teamId: teamsConversationIdSchema.optional(),
   chatType: z.enum(["direct", "channel", "group", "thread"]).default("direct"),
   tool: policyIdentifierSchema.optional(),
   action: policyIdentifierSchema.default("message"),
   resource: policyIdentifierSchema.default("slack"),
   userRoleNames: roleNameListSchema.default([]),
+}).superRefine((input, ctx) => {
+  const principalId = input.channelType === "slack"
+    ? input.slackUserId ?? input.principalId
+    : input.teamsAadUserId ?? input.principalId;
+  if (!principalId) {
+    ctx.addIssue({
+      code: "custom",
+      path: input.channelType === "slack" ? ["slackUserId"] : ["teamsAadUserId"],
+      message: `${input.channelType} policy evaluation requires a principal ID`,
+    });
+  }
+  if (input.channelType === "msteams" && input.chatType !== "direct" && !input.teamId) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["teamId"],
+      message: "Teams channel and group policy evaluation requires a team ID",
+    });
+  }
 });
 
-export type PolicyEvaluationInput = Omit<z.infer<typeof policyEvaluationSchema>, "userRoleNames"> & {
+export type PolicyEvaluationInput = Omit<z.infer<typeof policyEvaluationSchema>, "userRoleNames" | "channelType"> & {
+  channelType?: ChatPlatform;
   userRoleNames?: string[];
 };
 

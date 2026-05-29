@@ -1919,7 +1919,7 @@ async function handlePolicyEvaluate(context: RouteContext): Promise<void> {
   const parsedInput = policyEvaluationSchema.parse(await readJson(req));
   const input = {
     ...parsedInput,
-    userRoleNames: await loadSlackUserRoleNames(state.pool, workspace.company_id, workspace.id, parsedInput.slackUserId),
+    userRoleNames: await loadSlackUserRoleNames(state.pool, workspace.company_id, workspace.id, parsedInput.slackUserId ?? ""),
   };
   const policy = await loadPolicy(state.pool, workspace.id);
   const decision = evaluatePolicy(input, policy);

@@ -1127,7 +1127,7 @@ async function handleCredentials(context: RouteContext): Promise<void> {
       await client.query(
         `INSERT INTO channel_policies (workspace_id, channel_id, name, enabled, require_mention, allowed_user_ids)
          VALUES ($1, $2, 'Credential setup allowlist', true, true, $3)
-         ON CONFLICT (workspace_id, channel_type, channel_id)
+         ON CONFLICT (workspace_id, channel_type, team_id, channel_id)
          DO UPDATE SET name = COALESCE(channel_policies.name, EXCLUDED.name), enabled = true, require_mention = true, allowed_user_ids = EXCLUDED.allowed_user_ids, updated_at = now()`,
         [workspace.id, channelId, []],
       );

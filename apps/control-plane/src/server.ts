@@ -311,6 +311,7 @@ async function audit(pool: Queryable, input: {
   companyId?: string;
   workspaceId?: string;
   actorUserId?: string | null;
+  actorSlackUserId?: string | null;
   eventType: string;
   resourceType: string;
   resourceId?: string;
@@ -318,12 +319,13 @@ async function audit(pool: Queryable, input: {
   metadata?: Record<string, unknown>;
 }) {
   await pool.query(
-    `INSERT INTO audit_logs (company_id, workspace_id, actor_user_id, event_type, resource_type, resource_id, outcome, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT INTO audit_logs (company_id, workspace_id, actor_user_id, actor_slack_user_id, event_type, resource_type, resource_id, outcome, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       input.companyId ?? null,
       input.workspaceId ?? null,
       input.actorUserId ?? null,
+      input.actorSlackUserId ?? null,
       input.eventType,
       input.resourceType,
       input.resourceId ?? null,
@@ -1340,6 +1342,7 @@ async function handlePipedreamConnectToken(context: RouteContext): Promise<void>
         companyId: workspace.company_id,
         workspaceId: workspace.id,
         actorUserId: allowed.actorUserId,
+        actorSlackUserId: allowed.actorSlackUserId,
         eventType: "pipedream.connect_token_denied",
         resourceType: "pipedream_account",
         outcome: "deny",
@@ -1360,6 +1363,7 @@ async function handlePipedreamConnectToken(context: RouteContext): Promise<void>
     companyId: workspace.company_id,
     workspaceId: workspace.id,
     actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
     eventType: "pipedream.connect_token_created",
     resourceType: "pipedream_account",
     metadata: {
@@ -1398,6 +1402,7 @@ async function handlePipedreamDisconnectAccount(context: RouteContext): Promise<
     companyId: workspace.company_id,
     workspaceId: workspace.id,
     actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
     eventType: "pipedream.account_disconnected",
     resourceType: "pipedream_account",
     resourceId: accountId,
@@ -2315,6 +2320,7 @@ async function handleSecret({ req, res, url, state }: RouteContext): Promise<voi
   );
   await audit(state.pool, {
     workspaceId,
+    actorSlackUserId: slackUserId ?? null,
     eventType: "integration_credential.resolved",
     resourceType: "integration_credential",
     resourceId: id,
@@ -2461,6 +2467,7 @@ async function handlePluginPolicyCheck({ req, res, state }: RouteContext): Promi
     await audit(state.pool, {
       companyId: workspace.company_id,
       workspaceId: workspace.id,
+      actorSlackUserId: input.slackUserId,
       eventType: "pipedream.invocation",
       resourceType: "pipedream_tool",
       resourceId: `${input.tool}/${input.action}`,
@@ -2518,6 +2525,7 @@ async function handlePluginPipedreamConnectToken({ req, res, state }: RouteConte
       await audit(state.pool, {
         companyId: workspace.company_id,
         workspaceId: workspace.id,
+        actorSlackUserId: input.slackUserId,
         eventType: "pipedream.connect_token_denied",
         resourceType: "pipedream_account",
         outcome: "deny",
@@ -2536,6 +2544,7 @@ async function handlePluginPipedreamConnectToken({ req, res, state }: RouteConte
   await audit(state.pool, {
     companyId: workspace.company_id,
     workspaceId: workspace.id,
+    actorSlackUserId: input.slackUserId,
     eventType: "pipedream.connect_token_created",
     resourceType: "pipedream_account",
     metadata: { app: input.appSlug ?? null, slackUserId: input.slackUserId, expiresAt: token.expiresAt, source: "plugin" },
@@ -2650,7 +2659,7 @@ async function handleUsageSummary(context: RouteContext): Promise<void> {
 const listDefinitions: Record<string, { permission: { action: string; resource: string }; query: string }> = {
   audit_logs: {
     permission: { action: "audit:read", resource: "audit_log" },
-    query: `SELECT id, company_id, workspace_id, actor_user_id, event_type, resource_type, resource_id, outcome, metadata, created_at
+    query: `SELECT id, company_id, workspace_id, actor_user_id, actor_slack_user_id, event_type, resource_type, resource_id, outcome, metadata, created_at
             FROM audit_logs
             WHERE workspace_id = $1
             ORDER BY created_at DESC
@@ -2993,6 +3002,7 @@ export async function revokePipedreamAccountsForWorkspace(
         await audit(pool, {
           companyId: workspace.company_id,
           workspaceId: workspace.id,
+          actorSlackUserId: slackUserId,
           eventType: "pipedream.account_revoked",
           resourceType: "pipedream_account",
           resourceId: account.id,

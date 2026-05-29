@@ -168,7 +168,8 @@ test("/api/bootstrap accepts a valid admin token and writes the bootstrap audit 
       assert.equal(response.response.status, 200);
       assert.equal(response.body.workspaceId, workspaceId);
       assert.equal(auditRows.length, 1);
-      assert.equal(auditRows[0][3], "bootstrap.completed");
+      // audit() INSERT columns: ...actor_user_id($3), actor_slack_user_id($4), event_type($5) -> params index 4.
+      assert.equal(auditRows[0][4], "bootstrap.completed");
     });
   });
 });
@@ -299,7 +300,8 @@ test("workspace API routes return RBAC denial details for authenticated users wi
       assert.equal(response.body.error, "RBAC denied");
       assert.deepEqual(response.body.roles, ["viewer"]);
       assert.equal(auditRows.length, 1);
-      assert.equal(auditRows[0][3], "rbac.denied");
+      // event_type is params index 4 after actor_slack_user_id was added at index 3.
+      assert.equal(auditRows[0][4], "rbac.denied");
     });
   });
 });
@@ -340,4 +342,36 @@ test("/api/usage/summary returns per-user cost attribution alongside model, tool
   });
   // The per-user rollup must join usage_events to sessions, not aggregate usage_events alone.
   assert.ok(calls.some((c) => /LEFT JOIN sessions/.test(c.sql)), "expected a usage query that joins sessions for per-user attribution");
+});
+
+test("plugin policy-check audits pipedream.invocation with the Slack principal as a first-class actor", async () => {
+  const auditRows: unknown[][] = [];
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = existingWorkspaceSeedQueries(sql, params);
+    if (seeded) return seeded;
+    const workspace = workspaceJoinQuery(sql);
+    if (workspace) return workspace;
+    if (/FROM tool_policies/.test(sql)) return result();
+    if (/INSERT INTO audit_logs/.test(sql)) {
+      auditRows.push(params);
+      return result();
+    }
+    throw new Error(`Unexpected database query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_INTERNAL_TOKEN: "internal-secret" }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const response = await requestJson(baseUrl, "/internal/plugin/policy-check", {
+        method: "POST",
+        headers: { authorization: "Bearer internal-secret" },
+        body: JSON.stringify({ tool: "pipedream:github", action: "list", slackUserId: "U_PLUGIN" }),
+      });
+      assert.equal(response.response.status, 200);
+      assert.equal(auditRows.length, 1);
+      // INSERT params: actor_user_id($3 -> idx 2), actor_slack_user_id($4 -> idx 3), event_type($5 -> idx 4), ... metadata($9 -> idx 8).
+      assert.equal(auditRows[0][3], "U_PLUGIN");
+      assert.equal(auditRows[0][4], "pipedream.invocation");
+      assert.equal((auditRows[0][8] as Record<string, unknown>).slackUserId, "U_PLUGIN");
+    });
+  });
 });

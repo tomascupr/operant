@@ -103,6 +103,21 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs = {}, children = []) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "textContent") node.textContent = value;
+    else node.setAttribute(key, value === true ? "" : String(value));
+  }
+  for (const child of Array.isArray(children) ? children : [children]) {
+    if (child === null || child === undefined) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
 function toast(message) {
   const node = $("toast");
   node.textContent = message;
@@ -361,6 +376,38 @@ function renderRoles(roles) {
   select.replaceChildren(...options);
 }
 
+function costTrendChart(byDay) {
+  const days = (byDay ?? []).slice().reverse();
+  if (!days.length) return null;
+  const costs = days.map((row) => Number(row.estimated_cost_usd) || 0);
+  const max = Math.max(...costs, 0);
+  const W = 720, H = 168, padX = 10, padTop = 12, padBottom = 26;
+  const plotH = H - padTop - padBottom;
+  const slot = (W - padX * 2) / days.length;
+  const barW = Math.max(2, Math.min(28, slot * 0.7));
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "cost-trend", preserveAspectRatio: "none", role: "img", "aria-label": "Daily estimated cost trend" });
+  svg.append(svgEl("line", { x1: padX, y1: H - padBottom, x2: W - padX, y2: H - padBottom, class: "cost-axis" }));
+  days.forEach((row, i) => {
+    const cost = Number(row.estimated_cost_usd) || 0;
+    const h = max > 0 ? (cost / max) * plotH : 0;
+    const x = padX + slot * i + (slot - barW) / 2;
+    const bar = svgEl("rect", { x: x.toFixed(1), y: (H - padBottom - h).toFixed(1), width: barW.toFixed(1), height: h.toFixed(1), rx: 2, class: "cost-bar" });
+    bar.append(svgEl("title", { textContent: `${row.day}: ${usd(cost)} · ${number(row.total_tokens)} tok` }));
+    svg.append(bar);
+  });
+  svg.append(svgEl("text", { x: padX, y: H - 8, class: "cost-axis-label" }, days[0].day));
+  if (days.length > 1) svg.append(svgEl("text", { x: W - padX, y: H - 8, class: "cost-axis-label", "text-anchor": "end" }, days[days.length - 1].day));
+  return el("div", { className: "table-surface" }, [el("h4", { className: "usage-title", textContent: "Daily cost trend" }), svg]);
+}
+
+function usageTable(title, columns, rows, emptyTitle) {
+  const surface = el("div", { className: "table-surface" }, [el("h4", { className: "usage-title", textContent: title })]);
+  const body = el("div");
+  renderTable(body, columns, rows ?? [], emptyTitle, "");
+  surface.append(body);
+  return surface;
+}
+
 function renderUsageSummary(usage) {
   const target = $("usage-summary");
   target.replaceChildren();
@@ -374,22 +421,26 @@ function renderUsageSummary(usage) {
     el("div", { className: "stat-tile" }, [el("span", { className: "stat-value", textContent: number(usage.totals.input_tokens) }), el("small", { textContent: "Input tokens" })]),
     el("div", { className: "stat-tile" }, [el("span", { className: "stat-value", textContent: usd(usage.totals.estimated_cost_usd) }), el("small", { textContent: "Estimated cost" })]),
   ]);
-  const modelTarget = el("div", { className: "table-surface" });
-  const toolTarget = el("div", { className: "table-surface" });
-  renderTable(modelTarget, [
+  const byUser = usageTable("Cost by user", [
+    { label: "User", render: (row) => text(row.slack_user_id) },
+    { label: "Events", render: (row) => number(row.events) },
+    { label: "Tokens", render: (row) => number(row.total_tokens) },
+    { label: "Cost", render: (row) => usd(row.estimated_cost_usd) },
+  ], usage.byUser, "No per-user usage");
+  const byModel = usageTable("Cost by model", [
     { label: "Provider", render: (row) => text(row.provider) },
     { label: "Model", render: (row) => text(row.model) },
     { label: "Events", render: (row) => number(row.events) },
     { label: "Tokens", render: (row) => number(row.total_tokens) },
     { label: "Cost", render: (row) => usd(row.estimated_cost_usd) },
-  ], usage.byModel ?? [], "No model usage", "");
-  renderTable(toolTarget, [
+  ], usage.byModel, "No model usage");
+  const byTool = usageTable("Cost by tool", [
     { label: "Tool", render: (row) => text(row.tool_name) },
     { label: "Events", render: (row) => number(row.events) },
     { label: "Tokens", render: (row) => number(row.total_tokens) },
     { label: "Cost", render: (row) => usd(row.estimated_cost_usd) },
-  ], usage.byTool ?? [], "No tool usage", "");
-  target.append(cards, modelTarget, toolTarget);
+  ], usage.byTool, "No tool usage");
+  target.append(cards, costTrendChart(usage.byDay), byUser, byModel, byTool);
 }
 
 function renderUsageEvents(items) {

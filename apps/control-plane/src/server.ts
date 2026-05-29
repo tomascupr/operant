@@ -2621,6 +2621,21 @@ async function handleUsageSummary(context: RouteContext): Promise<void> {
      LIMIT 30`,
     [workspace.id],
   );
+  const byUser = await state.pool.query(
+    `SELECT COALESCE(s.slack_user_id, 'unattributed') AS slack_user_id,
+            count(*)::int AS events,
+            COALESCE(sum(u.input_tokens), 0)::float8 AS input_tokens,
+            COALESCE(sum(u.output_tokens), 0)::float8 AS output_tokens,
+            COALESCE(sum(u.input_tokens + u.output_tokens), 0)::float8 AS total_tokens,
+            COALESCE(sum(u.estimated_cost_usd), 0)::float8 AS estimated_cost_usd
+     FROM usage_events u
+     LEFT JOIN sessions s ON s.id = u.session_id
+     WHERE u.workspace_id = $1
+     GROUP BY COALESCE(s.slack_user_id, 'unattributed')
+     ORDER BY estimated_cost_usd DESC, events DESC, slack_user_id
+     LIMIT 25`,
+    [workspace.id],
+  );
 
   sendJson(res, 200, {
     workspaceId: workspace.id,
@@ -2628,6 +2643,7 @@ async function handleUsageSummary(context: RouteContext): Promise<void> {
     byModel: byModel.rows,
     byTool: byTool.rows,
     byDay: byDay.rows,
+    byUser: byUser.rows,
   });
 }
 

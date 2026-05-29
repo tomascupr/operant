@@ -303,3 +303,41 @@ test("workspace API routes return RBAC denial details for authenticated users wi
     });
   });
 });
+
+test("/api/usage/summary returns per-user cost attribution alongside model, tool, and day rollups", async () => {
+  const { pool, calls } = createFakePool((sql, params) => {
+    const seeded = existingWorkspaceSeedQueries(sql, params);
+    if (seeded) return seeded;
+    const workspace = workspaceJoinQuery(sql);
+    if (workspace) return workspace;
+    if (/SELECT 1 FROM role_assignments/.test(sql)) return result([{ exists: true }]);
+    if (/FROM users u\s+JOIN role_assignments/.test(sql)) return result([{ user_id: "user-owner", role_name: "owner" }]);
+    if (/FROM role_assignments ra\s+JOIN role_permissions/.test(sql)) return result([{ action: "*", resource: "*" }]);
+    if (/LEFT JOIN sessions/.test(sql)) return result([
+      { slack_user_id: "U_ALICE", events: 2, input_tokens: 80, output_tokens: 40, total_tokens: 120, estimated_cost_usd: 0.2 },
+      { slack_user_id: "unattributed", events: 1, input_tokens: 20, output_tokens: 10, total_tokens: 30, estimated_cost_usd: 0.05 },
+    ]);
+    if (/GROUP BY COALESCE\(provider/.test(sql)) return result([{ provider: "openai", model: "gpt", events: 3, total_tokens: 150, estimated_cost_usd: 0.25 }]);
+    if (/GROUP BY COALESCE\(tool_name/.test(sql)) return result([{ tool_name: "model", events: 3, total_tokens: 150, estimated_cost_usd: 0.25 }]);
+    if (/date_trunc\('day'/.test(sql)) return result([{ day: "2026-05-29", events: 3, total_tokens: 150, estimated_cost_usd: 0.25 }]);
+    if (/FROM usage_events\s+WHERE workspace_id = \$1/.test(sql)) return result([{ events: 3, input_tokens: 100, output_tokens: 50, total_tokens: 150, estimated_cost_usd: 0.25 }]);
+    throw new Error(`Unexpected database query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true" }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const response = await requestJson(baseUrl, "/api/usage/summary", {
+        headers: { "x-operant-slack-user-id": "UOWNER" },
+      });
+      assert.equal(response.response.status, 200);
+      assert.equal((response.body.totals as Record<string, unknown>).events, 3);
+      assert.deepEqual((response.body.byUser as Array<Record<string, unknown>>).map((row) => row.slack_user_id), ["U_ALICE", "unattributed"]);
+      assert.equal((response.body.byUser as Array<Record<string, unknown>>)[0].estimated_cost_usd, 0.2);
+      assert.equal((response.body.byModel as unknown[]).length, 1);
+      assert.equal((response.body.byTool as unknown[]).length, 1);
+      assert.equal((response.body.byDay as unknown[]).length, 1);
+    });
+  });
+  // The per-user rollup must join usage_events to sessions, not aggregate usage_events alone.
+  assert.ok(calls.some((c) => /LEFT JOIN sessions/.test(c.sql)), "expected a usage query that joins sessions for per-user attribution");
+});

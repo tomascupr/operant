@@ -102,7 +102,7 @@ workspace or to a specific Slack user.
 | Per-user OAuth | Pipedream Connect accounts keyed by Slack user id |
 | App/action policy | `pipedream:<app>` tool rules and role/user scopes |
 | Approvals | Named approvers, minimum approvals, dashboard decisions |
-| Audit and usage | Postgres audit log, sessions/jobs, token and cost rows |
+| Audit and usage | Postgres audit log, sessions/jobs, per-user token and cost rows |
 | Self-hosting | Docker Compose first, Helm/Fly artifacts for graduation |
 
 ![A real Operant deployment in Slack — multi-thread workspace activity from real users](docs/assets/slack-real-workspace.png)

@@ -82,7 +82,8 @@ Use the dashboard tabs left to right for a first deployment:
 5. **People**: add Slack users, assign built-in or custom roles, and create
    custom action/resource permission pairs.
 6. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
-   sessions/jobs, audit rows, usage events, and model/tool cost breakdowns.
+   sessions/jobs, audit rows, usage events, a daily cost trend, and
+   per-user, per-model, and per-tool cost breakdowns.
 7. **Data** and **OpenClaw**: run export, wipe, retention purge, config
    generation, observation sync, and OpenClaw checks only after confirming the
    dashboard dialog for each high-risk action.

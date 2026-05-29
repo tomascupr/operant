@@ -125,7 +125,7 @@ side.
 | GET    | `/api/approvals`         | session | Pending and resolved approval requests.                  |
 | POST   | `/api/approvals`         | session | Decide an approval (`approved` / `denied`).              |
 | GET    | `/api/usage`             | session | Per-event usage rows (tokens, cost).                    |
-| GET    | `/api/usage/summary`     | session | Roll-up of usage by model, day, and Slack user.          |
+| GET    | `/api/usage/summary`     | session | Roll-up of usage and cost by model, tool, day, and Slack user (`byUser`; events with no session bucket as `unattributed`). |
 
 ## Retention
 

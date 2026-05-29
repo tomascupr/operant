@@ -772,6 +772,33 @@ pre {
   gap: 10px;
 }
 
+.usage-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.cost-trend {
+  display: block;
+  width: 100%;
+  height: 168px;
+}
+
+.cost-trend .cost-bar {
+  fill: var(--accent);
+}
+
+.cost-trend .cost-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.cost-trend .cost-axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
 .empty-state {
   display: grid;
   gap: 4px;

@@ -17,6 +17,9 @@ export type Permission = {
   description?: string;
 };
 
+export const chatPlatforms = ["slack", "msteams"] as const;
+export type ChatPlatform = (typeof chatPlatforms)[number];
+
 export const policyIdentifierSchema = z.string()
   .min(1)
   .max(160)
@@ -36,6 +39,21 @@ export const slackIdSchema = z.string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, "Use only Slack identifier characters");
 
 const slackIdListSchema = z.array(slackIdSchema).max(200);
+
+export const teamsAppIdSchema = z.uuid("Use a Microsoft Teams app/client UUID");
+export const teamsTenantIdSchema = z.uuid("Use a Microsoft Entra tenant UUID");
+export const teamsAadUserIdSchema = z.uuid("Use a Microsoft Entra user object UUID");
+export const teamsConversationIdSchema = z.string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9_.:@=-]+$/, "Use only Teams identifier characters");
+
+export const teamsAadUserIdListSchema = z.array(teamsAadUserIdSchema).max(200);
+
+export const chatPrincipalIdSchema = z.string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9_.:@=-]+$/, "Use only chat principal identifier characters");
 
 function addDuplicateSlackIdIssues(ctx: z.RefinementCtx, values: string[], path: Array<string | number>, label: string): void {
   const seen = new Set<string>();
@@ -304,6 +322,8 @@ export type WorkspaceRecord = {
 };
 
 export type ChannelPolicyRecord = {
+  channelType?: ChatPlatform;
+  teamId?: string | null;
   channelId: string;
   name?: string | null;
   enabled: boolean;
@@ -317,6 +337,7 @@ export type ToolPolicyRecord = {
   action: string;
   effect: "allow" | "deny" | "approval_required";
   slackUserIds?: string[];
+  teamsAadUserIds?: string[];
   roleNames?: string[];
 };
 
@@ -325,6 +346,7 @@ export type ApprovalPolicyRecord = {
   actionPattern: string;
   resourcePattern: string;
   approverSlackUserIds: string[];
+  approverTeamsUserIds?: string[];
   minApprovals: number;
   enabled: boolean;
 };
@@ -337,9 +359,17 @@ export type OpenClawConfigInput = {
   modelName: string;
   sandboxMode?: "off" | "docker";
   dmAllowFrom: string[];
+  teamsDmAllowFrom?: string[];
   channelPolicies: ChannelPolicyRecord[];
   toolPolicies: ToolPolicyRecord[];
   approvalPolicies: ApprovalPolicyRecord[];
+  slackBotTokenConfigured?: boolean;
+  slackAppTokenConfigured?: boolean;
+  teamsAppId?: string | null;
+  teamsAppPasswordConfigured?: boolean;
+  teamsTenantId?: string | null;
+  msteamsWebhookPort?: number | null;
+  msteamsWebhookPath?: string | null;
   secretResolverCommand: string;
   secretResolverScript: string;
 };

@@ -252,7 +252,7 @@ process.exit(2);
       send(200, { data: apps, page_info: null });
       return;
     }
-    if (url.pathname === "/v1/connect/tokens") {
+    if (url.pathname === "/v1/connect/proj_dashboard/tokens") {
       send(200, {
         token: `ctok_dashboard_${body.user_id || "user"}`,
         expires_at: new Date(Date.now() + 300_000).toISOString(),

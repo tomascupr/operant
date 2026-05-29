@@ -779,6 +779,17 @@ pre {
   color: var(--muted);
 }
 
+.disclosure-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .cost-trend {
   display: block;
   width: 100%;

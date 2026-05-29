@@ -616,10 +616,10 @@ async function runDashboardE2E() {
     }))()`);
     throw new Error(`${error.message}; integration debug: ${JSON.stringify(integrationDebug)}; console=${JSON.stringify(page.consoleErrors)}; pageErrors=${JSON.stringify(page.pageErrors)}`);
   }
-  await page.evaluate(`document.querySelector('#pipedream-marketplace-grid [data-app="github"] .pipedream-connect').click()`);
+  await clickAndConfirm(page, '#pipedream-marketplace-grid [data-app="github"] .pipedream-connect');
   await page.waitForText("#pipedream-result", "connectLinkUrl");
   await page.waitForText("#pipedream-accounts", "dashboard-github");
-  report.checks.push("Pipedream marketplace search, action preview, connect link, and account status rendered");
+  report.checks.push("Pipedream marketplace search, sub-processor disclosure confirm, action preview, connect link, and account status rendered");
 
   await page.evaluate(`document.querySelector('[data-view-target="approvals-view"]').click()`);
   await submitForm(page, "#approval-form", {

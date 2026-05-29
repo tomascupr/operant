@@ -1133,6 +1133,14 @@ $("pipedream-marketplace-grid").addEventListener("click", async (event) => {
   const slug = card.dataset.app;
   try {
     if (event.target.closest(".pipedream-connect")) {
+      const ok = await confirmAction({
+        title: "Connect via Pipedream",
+        detail: "This opens Pipedream Connect, a third-party sub-processor. Your OAuth grant and tokens for this app are stored by Pipedream in Pipedream US infrastructure, outside your Operant and Postgres trust boundary. Operant governs and audits access; it does not store these tokens.",
+        summary: slug,
+        acceptLabel: "Continue to Pipedream",
+        danger: false,
+      });
+      if (!ok) return;
       const result = await request("/api/integrations/pipedream/connect-token", {
         method: "POST",
         body: JSON.stringify({ appSlug: slug }),

@@ -25,6 +25,22 @@ The Teams app (client) id and tenant id are stored as plaintext workspace
 settings (`workspaces.teams_app_id` / `teams_tenant_id`), not as encrypted
 secrets, mirroring how the Slack team id (`workspaces.slack_team_id`) is stored.
 
+Operant also stores the following in your Postgres, redacted (not encrypted)
+before INSERT — content is not a credential store, so it is held as searchable
+text with token-shaped strings and sensitive keys stripped:
+
+- Team memory entries (workspace-shared context) and private memory entries
+  (owner-only context), stored with content redacted for token-shaped strings
+  and sensitive keys before INSERT, indexed for full-text search using
+  Postgres-native tsvector.
+- Skill definitions (admin-curated, workspace-shared named text procedures),
+  with body and trigger_hint redacted before INSERT and indexed for full-text
+  search.
+
+Memory visibility is enforced server-side in SQL: an agent or non-admin only
+ever sees team entries plus its own private entries, so private context never
+crosses principals. Every write and every agent read emits an audit row.
+
 ## Sub-processors
 
 | Sub-processor | Data it holds | Region | Custody |

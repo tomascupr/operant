@@ -38,7 +38,10 @@ Chrome on macOS, or `CHROME_PATH` set to a Chromium-flavored binary.
   behavior covered, adding both Slack and Teams cases where policy behavior
   changes.
 - Migrations are append-only. Add `apps/control-plane/migrations/NNN_*.sql`
-  with the next number; do not rewrite an applied migration.
+  with the next number; do not rewrite an applied migration. For example,
+  migration 013 adds the `memory_entries` and `skill_definitions` tables with
+  Postgres-native full-text search indexes and audit tracking; the next
+  migration (014) would add an adjacent feature without rewriting 013.
 - The dashboard stays vanilla JS, no external scripts or bundler. The
   strict same-origin CSP is non-negotiable.
 - No secrets, real Slack tokens, or production credentials in commits.

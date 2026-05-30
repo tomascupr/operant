@@ -119,6 +119,32 @@ side.
 | GET    | `/api/users`   | session | List workspace users with role assignments.                            |
 | POST   | `/api/users`   | session | Upsert a user and assign/revoke roles.                                 |
 
+## Memory and Skills
+
+Governed team memory and reusable skills (migration `013_memory_skills.sql`).
+Memory entries carry `team` or `private` visibility; skills are admin-curated,
+named text procedures (a `name` + `triggerHint` + `body`) retrieved by the
+agent — not pushed into OpenClaw's native skills runtime. Search is
+Postgres-native keyword search (`tsvector` + GIN; no embeddings in v1).
+Visibility is enforced server-side in SQL: an agent or non-admin only ever
+sees `team` entries plus its own `private` entries — private entries never
+cross principals. Every write and read is audited and content/body is
+redacted before persistence.
+
+| Method | Path                | Auth               | Purpose                                                                                          |
+| ------ | ------------------- | ------------------ | ------------------------------------------------------------------------------------------------ |
+| GET    | `/api/memory`       | session (`memory:read`)  | List memory entries visible to the signed-in principal (team + own private).               |
+| POST   | `/api/memory`       | session (`memory:write`) | Create a memory entry. Body `{visibility:"team"\|"private", scopeKey?, tags?, content}`.    |
+| DELETE | `/api/memory/<id>`  | session (`memory:write`) | Delete a memory entry. Owner/admin can delete any; others only their own entries.          |
+| GET    | `/api/skills`       | session (`skills:read`)  | List skill definitions for the workspace.                                                  |
+| POST   | `/api/skills`       | session (`skills:write`, owner/admin only) | Create or upsert a skill (unique by name). Body `{name, triggerHint, body, tags?}`. |
+| DELETE | `/api/skills/<id>`  | session (`skills:write`, owner/admin only) | Delete a skill definition.                                                |
+
+`memory:read`/`memory:write` resolve to resource `memory`; `skills:read`/
+`skills:write` to resource `skill`. Owner and admin hold all four;
+`integration_admin` and `viewer` are read-only; `member` adds `memory:write`.
+`skills:write` (skill authoring) is owner/admin only.
+
 ## Activity, audit, usage, approvals
 
 | Method | Path                     | Auth    | Purpose                                                  |
@@ -146,7 +172,8 @@ These endpoints require `Authorization: Bearer $OPERANT_INTERNAL_TOKEN`.
 They are how OpenClaw resolves secrets just-in-time and how the
 Operant OpenClaw plugin asks the control plane for live policy
 decisions and user context. The control plane verifies the bearer with
-`crypto.timingSafeEqual`.
+`crypto.timingSafeEqual`. The memory/skills routes take a `principalId`
+in the body and resolve the platform (Slack or Teams) from its shape.
 
 | Method | Path                                       | Purpose                                                                                          |
 | ------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------ |
@@ -157,6 +184,9 @@ decisions and user context. The control plane verifies the bearer with
 | POST   | `/internal/plugin/pipedream/apps`          | Plugin searches the Pipedream app catalog for Slack self-service.                                |
 | POST   | `/internal/plugin/pipedream/connect-token` | Plugin creates a Pipedream Connect link for the requesting Slack user.                           |
 | POST   | `/internal/plugin/pipedream/accounts`      | Plugin lists the requesting Slack user's connected Pipedream accounts.                           |
+| POST   | `/internal/plugin/memory/write`            | Write a memory entry from the agent's principal. Redaction + audit applied server-side.          |
+| POST   | `/internal/plugin/memory/search`           | Keyword-search memory for the agent's principal, returning team + own private entries.           |
+| POST   | `/internal/plugin/skills/search`           | Keyword-search skill definitions, returning workspace-level results.                             |
 
 `SecretRef IDs` follow `workspaces/<workspaceId>/<path>` for shared
 secrets and `workspaces/<workspaceId>/users/<slackUserId>/<path>` for
@@ -186,7 +216,9 @@ credential pulls are attestable.
   `ctok_`/`tok_`) and Pipedream Connect links, plus the value of any
   object key matching token/apikey/password/secret/authorization/cookie/credential,
   are scrubbed from audit rows and exports before persistence
-  (`apps/control-plane/src/redaction.ts`).
+  (`apps/control-plane/src/redaction.ts`). The same sanitizer runs on
+  memory `content` and skill `body`/`triggerHint` before `INSERT`, and
+  every memory/skills read, write, and delete emits an audit row.
 - **Idempotency**: `POST /api/openclaw/config`, `POST /api/wipe`, and
   `POST /api/retention/purge` are idempotent by checksum or job ID.
 

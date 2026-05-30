@@ -84,10 +84,15 @@ Use the dashboard tabs left to right for a first deployment:
    review.
 5. **People**: add Slack users, assign built-in or custom roles, and create
    custom action/resource permission pairs.
-6. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
+6. **Knowledge**: search and manage team memory entries and admin-curated skill
+   definitions. Memory entries are private by default (visible only to the
+   owner) or shared as team-visible (visible to all workspace members). Skills
+   are workspace-shared procedures that admins define; agents retrieve them via
+   the operant_skills_search tool. Both are RBAC-gated and audit-attested.
+7. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
    sessions/jobs, audit rows, usage events, a daily cost trend, and
    per-user, per-model, and per-tool cost breakdowns.
-7. **Data** and **OpenClaw**: run export, wipe, retention purge, config
+8. **Data** and **OpenClaw**: run export, wipe, retention purge, config
    generation, observation sync, and OpenClaw checks only after confirming the
    dashboard dialog for each high-risk action.
 

@@ -63,8 +63,19 @@
             </div>
             <form id="login-form" class="inline-form compact-form">
               <label>
+                Platform
+                <select name="platform" aria-label="Chat platform">
+                  <option value="slack" selected>Slack</option>
+                  <option value="msteams">Microsoft Teams</option>
+                </select>
+              </label>
+              <label id="login-slack-field">
                 Slack user ID
-                <input name="slackUserId" placeholder="U12345678" required autocomplete="off" />
+                <input name="slackUserId" placeholder="U12345678" autocomplete="off" />
+              </label>
+              <label id="login-teams-field">
+                Teams AAD user ID
+                <input name="teamsAadUserId" placeholder="00000000-0000-0000-0000-000000000000" autocomplete="off" />
               </label>
               <label>
                 Admin login token
@@ -100,10 +111,16 @@
                 <small>Required on first setup; kept as owner and approver.</small>
               </label>
               <label>
+                Admin Teams AAD user ID
+                <input name="adminTeamsAadUserId" placeholder="00000000-0000-0000-0000-000000000000" />
+                <small>Teams owner identity; kept as owner and approver.</small>
+              </label>
+              <label>
                 Admin login token
                 <input name="adminLoginToken" type="password" autocomplete="off" placeholder="Required before owner setup" />
                 <small>Use the generated token from the env file.</small>
               </label>
+              <h4 class="form-subhead">Slack</h4>
               <label>
                 Slack bot token
                 <input name="slackBotToken" type="password" placeholder="xoxb-... or blank to keep current" autocomplete="off" />
@@ -114,6 +131,63 @@
                 <input name="slackAppToken" type="password" placeholder="xapp-... or blank to keep current" autocomplete="off" />
                 <small class="saved-indicator" data-saved-for="slack/appToken"></small>
               </label>
+              <label>
+                Allowed DM users
+                <input name="allowedDmUserIds" placeholder="U12345678, U23456789" />
+                <small>Slack users who may DM Operant.</small>
+              </label>
+              <label>
+                Allowed channels
+                <input name="allowedChannelIds" placeholder="C12345678, C23456789" />
+                <small>Channels where OpenClaw should listen for mentions.</small>
+              </label>
+              <label>
+                Approval users
+                <input name="approvalSlackUserIds" placeholder="U12345678" />
+                <small>Slack approvers for the default risky exec policy.</small>
+              </label>
+              <h4 class="form-subhead">Microsoft Teams</h4>
+              <label>
+                Teams app ID
+                <input name="teamsAppId" placeholder="00000000-0000-0000-0000-000000000000" />
+                <small>Azure Bot application (client) ID.</small>
+              </label>
+              <label>
+                Teams app password
+                <input name="teamsAppPassword" type="password" placeholder="Azure Bot client secret or blank to keep current" autocomplete="off" />
+                <small class="saved-indicator" data-saved-for="msteams/appPassword"></small>
+              </label>
+              <label>
+                Teams tenant ID
+                <input name="teamsTenantId" placeholder="00000000-0000-0000-0000-000000000000" />
+                <small>Microsoft Entra tenant UUID.</small>
+              </label>
+              <label>
+                Teams webhook port
+                <input name="msteamsWebhookPort" type="number" min="1" max="65535" placeholder="3978" />
+                <small>Port the Teams webhook listener binds.</small>
+              </label>
+              <label>
+                Teams webhook path
+                <input name="msteamsWebhookPath" placeholder="/api/messages" />
+                <small>Absolute path for inbound Teams activity.</small>
+              </label>
+              <label>
+                Allowed Teams DM users
+                <input name="allowedTeamsDmUserIds" placeholder="AAD object ID, AAD object ID" />
+                <small>Teams users who may DM Operant.</small>
+              </label>
+              <label class="wide-field">
+                Teams channel policies
+                <textarea name="teamsChannelPolicies" placeholder="teamId channelId allowedAadUserId,allowedAadUserId"></textarea>
+                <small>One policy per line: team ID, channel ID, then optional comma-separated allowed AAD user IDs.</small>
+              </label>
+              <label>
+                Teams approval users
+                <input name="approvalTeamsUserIds" placeholder="AAD object ID" />
+                <small>Teams approvers for the default risky exec policy.</small>
+              </label>
+              <h4 class="form-subhead">Model</h4>
               <label>
                 Model provider
                 <select name="modelProvider" required>
@@ -131,21 +205,6 @@
                 Model API key
                 <input name="modelApiKey" type="password" placeholder="sk-... or blank to keep current" autocomplete="off" />
                 <small class="saved-indicator" data-saved-for-prefix="models/"></small>
-              </label>
-              <label>
-                Allowed DM users
-                <input name="allowedDmUserIds" placeholder="U12345678, U23456789" />
-                <small>Slack users who may DM Operant.</small>
-              </label>
-              <label>
-                Allowed channels
-                <input name="allowedChannelIds" placeholder="C12345678, C23456789" />
-                <small>Channels where OpenClaw should listen for mentions.</small>
-              </label>
-              <label>
-                Approval users
-                <input name="approvalSlackUserIds" placeholder="U12345678" />
-                <small>Approvers for the default risky exec policy.</small>
               </label>
               <div class="form-actions">
                 <button type="submit">Save And Generate Config</button>
@@ -296,8 +355,17 @@
             <textarea id="policy-editor" spellcheck="false" aria-label="Policy JSON"></textarea>
             <div id="policy-filtered-rows" class="result-surface">No app policy filter selected.</div>
             <form id="policy-form" class="inline-form compact-form">
-              <label>Slack user ID<input name="slackUserId" placeholder="Slack user ID" required /></label>
-              <label>Channel ID<input name="slackChannelId" placeholder="Channel ID" /></label>
+              <label>Platform
+                <select name="channelType">
+                  <option value="slack" selected>Slack</option>
+                  <option value="msteams">Microsoft Teams</option>
+                </select>
+              </label>
+              <label>Slack user ID<input name="slackUserId" placeholder="Slack user ID" /></label>
+              <label>Teams AAD user ID<input name="teamsAadUserId" placeholder="Teams AAD user ID" /></label>
+              <label>Slack channel ID<input name="slackChannelId" placeholder="Channel ID" /></label>
+              <label>Teams team ID<input name="teamId" placeholder="Teams team ID" /></label>
+              <label>Teams channel ID<input name="teamsChannelId" placeholder="Teams channel ID" /></label>
               <label>Chat type
                 <select name="chatType">
                   <option value="direct">DM</option>
@@ -325,7 +393,10 @@
           <section class="panel">
             <h3>User Access</h3>
             <form id="user-form" class="form-grid">
-              <label>Slack user ID<input name="slackUserId" placeholder="U23456789" required /></label>
+              <label>Slack user ID<input name="slackUserId" placeholder="U23456789" /></label>
+              <label>Teams AAD user ID<input name="teamsAadUserId" placeholder="00000000-0000-0000-0000-000000000000" /></label>
+              <label>Teams bot user ID<input name="teamsBotUserId" placeholder="29:..." /></label>
+              <label>Teams tenant ID<input name="teamsTenantId" placeholder="00000000-0000-0000-0000-000000000000" /></label>
               <label>Name<input name="name" placeholder="Jane Admin" /></label>
               <label>Email<input name="email" type="email" placeholder="jane@example.com" /></label>
               <label>Roles
@@ -424,6 +495,10 @@
               <label>Company name<input name="companyName" placeholder="Company name" /></label>
               <label>Workspace name<input name="workspaceName" placeholder="Workspace name" /></label>
               <label>Slack team ID<input name="slackTeamId" placeholder="Slack team ID" /></label>
+              <label>Teams app ID<input name="teamsAppId" placeholder="Teams app ID" /></label>
+              <label>Teams tenant ID<input name="teamsTenantId" placeholder="Teams tenant ID" /></label>
+              <label>Teams webhook port<input name="msteamsWebhookPort" type="number" min="1" max="65535" placeholder="Teams webhook port" /></label>
+              <label>Teams webhook path<input name="msteamsWebhookPath" placeholder="Teams webhook path" /></label>
               <label>OpenClaw gateway URL<input name="openclawGatewayUrl" placeholder="http://openclaw-gateway:18789" /></label>
               <label>Model provider
                 <select name="modelProvider">

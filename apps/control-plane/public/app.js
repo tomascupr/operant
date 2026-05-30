@@ -52,6 +52,18 @@ function parsePermissionPairs(value) {
     });
 }
 
+function parseTeamsChannelPolicies(value) {
+  return String(value || "")
+    .split(/\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [teamId, channelId, users = ""] = item.split(/\s+/);
+      if (!teamId || !channelId) throw new Error("Each Teams channel policy needs a team ID and channel ID");
+      return { teamId, channelId, allowedUserIds: splitIds(users) };
+    });
+}
+
 function selectedValues(select) {
   return Array.from(select.selectedOptions, (option) => option.value).filter(Boolean);
 }
@@ -195,15 +207,34 @@ async function request(path, options = {}) {
   return body;
 }
 
-async function login(slackUserId, adminLoginToken) {
+function savedLoginPlatform() {
+  return localStorage.getItem("operant.adminPlatform") ?? "slack";
+}
+
+function savedLoginPrincipalId() {
+  return localStorage.getItem("operant.adminPrincipalId")
+    ?? localStorage.getItem("operant.adminSlackUserId");
+}
+
+async function login({ slackUserId, teamsAadUserId, platform, adminLoginToken }) {
+  const payload = { adminLoginToken };
+  if (slackUserId) payload.slackUserId = slackUserId;
+  if (teamsAadUserId) payload.teamsAadUserId = teamsAadUserId;
+  if (platform) payload.platform = platform;
   const result = await request("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ slackUserId, adminLoginToken }),
+    body: JSON.stringify(payload),
     headers: {},
   });
+  const resolvedPlatform = result.user?.platform || platform || (slackUserId ? "slack" : "msteams");
+  const principalId = resolvedPlatform === "msteams"
+    ? result.user?.teamsAadUserId || teamsAadUserId
+    : result.user?.slackUserId || slackUserId;
   localStorage.setItem("operant.sessionToken", result.token);
-  localStorage.setItem("operant.adminSlackUserId", slackUserId);
-  $("session-state").textContent = `${slackUserId} signed in`;
+  localStorage.setItem("operant.adminPlatform", resolvedPlatform);
+  if (principalId) localStorage.setItem("operant.adminPrincipalId", principalId);
+  localStorage.removeItem("operant.adminSlackUserId");
+  $("session-state").textContent = `${principalId || "(unknown principal)"} signed in (${resolvedPlatform})`;
   $("login-result").replaceChildren(
     statusPill("Signed in", "ok"),
     el("span", { textContent: ` Session expires ${formatDate(result.expiresAt)}` }),
@@ -212,9 +243,10 @@ async function login(slackUserId, adminLoginToken) {
 }
 
 function renderSignedOut() {
-  const savedSlackUserId = localStorage.getItem("operant.adminSlackUserId");
+  const savedPrincipalId = savedLoginPrincipalId();
+  const savedPlatform = savedLoginPlatform();
   const sessionToken = localStorage.getItem("operant.sessionToken");
-  $("session-state").textContent = sessionToken && savedSlackUserId ? `${savedSlackUserId} signed in` : "Not signed in";
+  $("session-state").textContent = sessionToken && savedPrincipalId ? `${savedPrincipalId} signed in (${savedPlatform})` : "Not signed in";
   for (const id of ["credentials", "channels", "sessions", "usage", "approvals", "audit"]) $(id).textContent = "-";
   $("settings-result").textContent = "Sign in to view settings.";
   $("usage-summary").replaceChildren(emptyState("Sign in required", "Usage totals are available to authorized users."));
@@ -347,7 +379,8 @@ function renderCredentials(credentials) {
 
 function renderUsers(users) {
   renderTable($("users-result"), [
-    { label: "Slack user", render: (row) => el("span", { className: "code-chip", textContent: row.slack_user_id }) },
+    { label: "Slack user", render: (row) => row.slack_user_id ? el("span", { className: "code-chip", textContent: row.slack_user_id }) : "—" },
+    { label: "Teams user", render: (row) => row.teams_aad_user_id ? el("span", { className: "code-chip", textContent: shortId(row.teams_aad_user_id, 6) }) : "—" },
     { label: "Name", render: (row) => text(row.name) },
     { label: "Email", render: (row) => text(row.email) },
     { label: "Roles", render: (row) => (row.roles ?? []).map((role) => statusPill(role, role === "owner" ? "ok" : "")).reduce((frag, node) => (frag.append(node, " "), frag), document.createDocumentFragment()) },
@@ -921,9 +954,10 @@ function closeConfirm(value) {
 }
 
 async function loadSummary() {
-  const savedSlackUserId = localStorage.getItem("operant.adminSlackUserId");
+  const savedPrincipalId = savedLoginPrincipalId();
+  const savedPlatform = savedLoginPlatform();
   const sessionToken = localStorage.getItem("operant.sessionToken");
-  $("session-state").textContent = sessionToken && savedSlackUserId ? `${savedSlackUserId} signed in` : "Not signed in";
+  $("session-state").textContent = sessionToken && savedPrincipalId ? `${savedPrincipalId} signed in (${savedPlatform})` : "Not signed in";
 
   let summary;
   try {
@@ -962,6 +996,10 @@ async function loadSummary() {
       form.elements.companyName.value = settings.companyName || "";
       form.elements.workspaceName.value = settings.workspaceName || "";
       form.elements.slackTeamId.value = settings.slackTeamId || "";
+      form.elements.teamsAppId.value = settings.teamsAppId || "";
+      form.elements.teamsTenantId.value = settings.teamsTenantId || "";
+      form.elements.msteamsWebhookPort.value = settings.msteamsWebhookPort || "";
+      form.elements.msteamsWebhookPath.value = settings.msteamsWebhookPath || "";
       form.elements.openclawGatewayUrl.value = settings.openclawGatewayUrl || "";
       form.elements.modelProvider.value = settings.modelProvider || "";
       form.elements.modelName.value = settings.modelName || "";
@@ -973,7 +1011,12 @@ async function loadSummary() {
       credForm.elements.workspaceName.value = settings.workspaceName || "";
       credForm.elements.modelProvider.value = settings.modelProvider || "openai";
       credForm.elements.modelName.value = settings.modelName || "";
-      if (savedSlackUserId) credForm.elements.adminSlackUserId.value = savedSlackUserId;
+      credForm.elements.teamsAppId.value = settings.teamsAppId || "";
+      credForm.elements.teamsTenantId.value = settings.teamsTenantId || "";
+      credForm.elements.msteamsWebhookPort.value = settings.msteamsWebhookPort || "";
+      credForm.elements.msteamsWebhookPath.value = settings.msteamsWebhookPath || "";
+      if (savedPlatform === "slack" && savedPrincipalId) credForm.elements.adminSlackUserId.value = savedPrincipalId;
+      if (savedPlatform === "msteams" && savedPrincipalId) credForm.elements.adminTeamsAadUserId.value = savedPrincipalId;
     }
     renderOperationResult("settings-result", "Current settings", settings);
   } catch {
@@ -985,9 +1028,16 @@ async function loadSummary() {
     $("policy-editor").value = JSON.stringify(appState.policy, null, 2);
     const credForm = $("credentials-form");
     if (credForm) {
+      const channels = appState.policy.channelPolicies ?? [];
       credForm.elements.allowedDmUserIds.value = (appState.policy.allowedDmUserIds ?? []).join(", ");
-      credForm.elements.allowedChannelIds.value = (appState.policy.channelPolicies ?? []).map((c) => c.channelId).join(", ");
+      credForm.elements.allowedChannelIds.value = channels.filter((c) => c.channelType !== "msteams").map((c) => c.channelId).join(", ");
       credForm.elements.approvalSlackUserIds.value = Array.from(new Set((appState.policy.approvalPolicies ?? []).flatMap((p) => p.approverSlackUserIds ?? []))).join(", ");
+      credForm.elements.allowedTeamsDmUserIds.value = (appState.policy.allowedTeamsDmUserIds ?? []).join(", ");
+      credForm.elements.teamsChannelPolicies.value = channels
+        .filter((c) => c.channelType === "msteams")
+        .map((c) => [c.teamId ?? "", c.channelId, (c.allowedUserIds ?? []).join(",")].filter(Boolean).join(" "))
+        .join("\n");
+      credForm.elements.approvalTeamsUserIds.value = Array.from(new Set((appState.policy.approvalPolicies ?? []).flatMap((p) => p.approverTeamsUserIds ?? []))).join(", ");
     }
     renderPolicyStructured(appState.policy);
     renderPolicyFilteredRows(appState.policy);
@@ -1082,11 +1132,16 @@ async function loadSummary() {
 function validateCredentialInputs() {
   const form = $("credentials-form");
   if (!form) return;
+  const isUuid = (value) => /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
   const checks = [
     [form.elements.slackBotToken, (value) => !value || value.startsWith("xoxb-")],
     [form.elements.slackAppToken, (value) => !value || value.startsWith("xapp-")],
     [form.elements.modelApiKey, (value) => !value || value.length >= 8],
     [form.elements.adminSlackUserId, (value) => !value || /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value)],
+    [form.elements.adminTeamsAadUserId, (value) => !value || isUuid(value)],
+    [form.elements.teamsAppId, (value) => !value || isUuid(value)],
+    [form.elements.teamsTenantId, (value) => !value || isUuid(value)],
+    [form.elements.teamsAppPassword, (value) => !value || value.length >= 8],
   ];
   let invalid = 0;
   for (const [input, validator] of checks) {
@@ -1106,6 +1161,16 @@ function switchView(targetId) {
 for (const tab of document.querySelectorAll(".nav-tab")) {
   tab.addEventListener("click", () => switchView(tab.dataset.viewTarget));
 }
+
+function applyLoginPlatformVisibility() {
+  const form = $("login-form");
+  const isSlack = form.elements.platform.value !== "msteams";
+  $("login-slack-field").hidden = !isSlack;
+  $("login-teams-field").hidden = isSlack;
+}
+$("login-form").elements.platform.value = savedLoginPlatform();
+applyLoginPlatformVisibility();
+$("login-form").elements.platform.addEventListener("change", applyLoginPlatformVisibility);
 
 for (const input of $("credentials-form").querySelectorAll("input, select")) {
   input.addEventListener("input", validateCredentialInputs);
@@ -1186,8 +1251,20 @@ $("pipedream-accounts").addEventListener("click", async (event) => {
 $("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const platform = String(form.get("platform") || "slack");
+  const slackUserId = String(form.get("slackUserId") || "").trim() || undefined;
+  const teamsAadUserId = String(form.get("teamsAadUserId") || "").trim() || undefined;
+  const adminLoginToken = String(form.get("adminLoginToken") || "");
+  if (platform === "slack" && !slackUserId) {
+    toast("Slack login needs a Slack user ID");
+    return;
+  }
+  if (platform === "msteams" && !teamsAadUserId) {
+    toast("Teams login needs a Teams AAD user ID");
+    return;
+  }
   try {
-    await login(String(form.get("slackUserId") || ""), String(form.get("adminLoginToken") || ""));
+    await login({ slackUserId, teamsAadUserId, platform, adminLoginToken });
     toast("Signed in");
     await loadSummary();
   } catch (error) {
@@ -1210,6 +1287,9 @@ $("logout").addEventListener("click", async () => {
     // Continue with local logout even if the server session is already gone.
   }
   localStorage.removeItem("operant.sessionToken");
+  localStorage.removeItem("operant.adminPlatform");
+  localStorage.removeItem("operant.adminPrincipalId");
+  localStorage.removeItem("operant.adminSlackUserId");
   $("session-state").textContent = "Not signed in";
   toast("Signed out");
   await loadSummary().catch(() => renderSignedOut());
@@ -1221,26 +1301,39 @@ $("credentials-form").addEventListener("submit", async (event) => {
   validateCredentialInputs();
   const form = new FormData(credentialsForm);
   const payload = Object.fromEntries(form.entries());
-  if (payload.adminSlackUserId) localStorage.setItem("operant.adminSlackUserId", payload.adminSlackUserId);
+  const adminSlackUserId = payload.adminSlackUserId;
+  const adminTeamsAadUserId = payload.adminTeamsAadUserId;
   if (!payload.adminLoginToken) delete payload.adminLoginToken;
   payload.allowedDmUserIds = splitIds(payload.allowedDmUserIds);
   payload.allowedChannelIds = splitIds(payload.allowedChannelIds);
   payload.approvalSlackUserIds = splitIds(payload.approvalSlackUserIds);
-  if (payload.adminSlackUserId) {
-    payload.allowedDmUserIds = Array.from(new Set([payload.adminSlackUserId, ...payload.allowedDmUserIds]));
-    payload.approvalSlackUserIds = Array.from(new Set([payload.adminSlackUserId, ...payload.approvalSlackUserIds]));
+  payload.allowedTeamsDmUserIds = splitIds(payload.allowedTeamsDmUserIds);
+  payload.approvalTeamsUserIds = splitIds(payload.approvalTeamsUserIds);
+  payload.teamsChannelPolicies = parseTeamsChannelPolicies(payload.teamsChannelPolicies);
+  if (payload.msteamsWebhookPort) payload.msteamsWebhookPort = Number(payload.msteamsWebhookPort);
+  if (adminSlackUserId) {
+    payload.allowedDmUserIds = Array.from(new Set([adminSlackUserId, ...payload.allowedDmUserIds]));
+    payload.approvalSlackUserIds = Array.from(new Set([adminSlackUserId, ...payload.approvalSlackUserIds]));
   }
-  for (const key of ["slackBotToken", "slackAppToken", "modelApiKey", "adminLoginToken"]) {
-    if (!payload[key]) delete payload[key];
+  if (adminTeamsAadUserId) {
+    payload.allowedTeamsDmUserIds = Array.from(new Set([adminTeamsAadUserId, ...payload.allowedTeamsDmUserIds]));
+    payload.approvalTeamsUserIds = Array.from(new Set([adminTeamsAadUserId, ...payload.approvalTeamsUserIds]));
+  }
+  for (const key of Object.keys(payload)) {
+    if (payload[key] === "") delete payload[key];
   }
   try {
     const result = await request("/api/config/credentials", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    if (payload.adminSlackUserId && payload.adminLoginToken) await login(payload.adminSlackUserId, payload.adminLoginToken);
+    if (payload.adminLoginToken && (adminSlackUserId || adminTeamsAadUserId)) {
+      const platform = adminSlackUserId && adminTeamsAadUserId ? "slack" : adminSlackUserId ? "slack" : "msteams";
+      await login({ slackUserId: adminSlackUserId, teamsAadUserId: adminTeamsAadUserId, platform, adminLoginToken: payload.adminLoginToken });
+    }
     credentialsForm.elements.slackBotToken.value = "";
     credentialsForm.elements.slackAppToken.value = "";
+    credentialsForm.elements.teamsAppPassword.value = "";
     credentialsForm.elements.modelApiKey.value = "";
     credentialsForm.elements.adminLoginToken.value = "";
     toast(`Config generated: ${result.checksum.slice(0, 12)}`);
@@ -1255,14 +1348,15 @@ $("user-form").addEventListener("submit", async (event) => {
   const form = new FormData(event.currentTarget);
   const payload = Object.fromEntries(form.entries());
   payload.roles = form.getAll("roles").map((value) => String(value)).filter((value) => value.length > 0);
-  if (!payload.email) delete payload.email;
-  if (!payload.name) delete payload.name;
+  for (const key of ["email", "name", "slackUserId", "teamsAadUserId", "teamsBotUserId", "teamsTenantId"]) {
+    if (!payload[key]) delete payload[key];
+  }
   try {
     const result = await request("/api/users", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    toast(`Saved ${result.user.slack_user_id}`);
+    toast(`Saved ${result.user.slack_user_id || result.user.teams_aad_user_id || "user"}`);
     await loadSummary();
   } catch (error) {
     toast(error.message);
@@ -1352,6 +1446,7 @@ $("settings-form").addEventListener("submit", async (event) => {
   const form = new FormData(event.currentTarget);
   const payload = Object.fromEntries(form.entries());
   if (payload.retentionDays) payload.retentionDays = Number(payload.retentionDays);
+  if (payload.msteamsWebhookPort) payload.msteamsWebhookPort = Number(payload.msteamsWebhookPort);
   for (const key of Object.keys(payload)) {
     if (payload[key] === "") delete payload[key];
   }
@@ -1571,7 +1666,7 @@ $("policy-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const payload = Object.fromEntries(form.entries());
-  for (const key of ["slackChannelId", "tool", "action", "resource"]) {
+  for (const key of ["slackUserId", "teamsAadUserId", "slackChannelId", "teamId", "teamsChannelId", "tool", "action", "resource"]) {
     if (!payload[key]) delete payload[key];
   }
   try {

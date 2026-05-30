@@ -522,6 +522,41 @@ async function runDashboardE2E() {
     checks: [],
   };
 
+  const teamsLogin = await page.evaluate(`(() => {
+    const form = document.querySelector("#login-form");
+    const platform = form.elements.platform;
+    platform.value = "slack";
+    platform.dispatchEvent(new Event("change", { bubbles: true }));
+    const slackHiddenForSlack = document.querySelector("#login-slack-field").hidden;
+    const teamsHiddenForSlack = document.querySelector("#login-teams-field").hidden;
+    platform.value = "msteams";
+    platform.dispatchEvent(new Event("change", { bubbles: true }));
+    const slackHiddenForTeams = document.querySelector("#login-slack-field").hidden;
+    const teamsHiddenForTeams = document.querySelector("#login-teams-field").hidden;
+    platform.value = "slack";
+    platform.dispatchEvent(new Event("change", { bubbles: true }));
+    const credForm = document.querySelector("#credentials-form");
+    const teamsFields = ["teamsAppId", "teamsAppPassword", "teamsTenantId", "msteamsWebhookPort", "msteamsWebhookPath", "allowedTeamsDmUserIds", "teamsChannelPolicies", "approvalTeamsUserIds", "adminTeamsAadUserId"];
+    const presentTeamsFields = teamsFields.every((name) => Boolean(credForm.elements[name]));
+    const settingsForm = document.querySelector("#settings-form");
+    const presentSettingsTeamsFields = ["teamsAppId", "teamsTenantId", "msteamsWebhookPort", "msteamsWebhookPath"].every((name) => Boolean(settingsForm.elements[name]));
+    const policyForm = document.querySelector("#policy-form");
+    const presentPolicyTeamsFields = ["channelType", "teamsAadUserId", "teamId", "teamsChannelId"].every((name) => Boolean(policyForm.elements[name]));
+    const userForm = document.querySelector("#user-form");
+    const presentUserTeamsFields = ["teamsAadUserId", "teamsBotUserId", "teamsTenantId"].every((name) => Boolean(userForm.elements[name]));
+    return {
+      slackHiddenForSlack, teamsHiddenForSlack, slackHiddenForTeams, teamsHiddenForTeams,
+      presentTeamsFields, presentSettingsTeamsFields, presentPolicyTeamsFields, presentUserTeamsFields,
+    };
+  })()`);
+  assert(teamsLogin.presentTeamsFields, "Credential form is missing Teams setup fields");
+  assert(teamsLogin.presentSettingsTeamsFields, "Settings form is missing Teams fields");
+  assert(teamsLogin.presentPolicyTeamsFields, "Policy evaluate form is missing Teams fields");
+  assert(teamsLogin.presentUserTeamsFields, "User form is missing Teams identity fields");
+  assert(!teamsLogin.slackHiddenForSlack && teamsLogin.teamsHiddenForSlack, "Slack login field should be visible and Teams field hidden when platform=slack");
+  assert(teamsLogin.slackHiddenForTeams && !teamsLogin.teamsHiddenForTeams, "Teams login field should be visible and Slack field hidden when platform=msteams");
+  report.checks.push("Teams login platform toggle and Teams credential/settings/policy/user fields present");
+
   await submitForm(page, "#credentials-form", {
     companyName: "Operant Dashboard E2E",
     workspaceName: `Dashboard Workspace ${suffix}`,
@@ -599,6 +634,27 @@ async function runDashboardE2E() {
   });
   await page.waitForText("#policy-result", "allow");
   report.checks.push("policy preview evaluated through dashboard");
+
+  await page.evaluate(`document.querySelector("#policy-form").elements.slackUserId.value = ""`);
+  await submitForm(page, "#policy-form", {
+    channelType: "msteams",
+    teamsAadUserId: "11111111-2222-4333-8444-555555555555",
+    chatType: "direct",
+    action: "message",
+    resource: "msteams",
+  });
+  try {
+    await page.waitForText("#policy-result", "deny");
+  } catch (error) {
+    const teamsEvalDebug = await page.evaluate(`(() => ({
+      result: document.querySelector("#policy-result")?.textContent || "",
+      toast: document.querySelector("#toast")?.textContent || "",
+      channelType: document.querySelector("#policy-form").elements.channelType.value,
+      teamsAadUserId: document.querySelector("#policy-form").elements.teamsAadUserId.value
+    }))()`);
+    throw new Error(`${error.message}; teams eval debug: ${JSON.stringify(teamsEvalDebug)}; console=${JSON.stringify(page.consoleErrors)}; pageErrors=${JSON.stringify(page.pageErrors)}`);
+  }
+  report.checks.push("Teams DM policy evaluation denied a non-allowlisted Teams user through the dashboard");
 
   await page.evaluate(`document.querySelector('[data-view-target="integrations-view"]').click()`);
   await page.waitForText("#pipedream-marketplace-grid", "Gmail");

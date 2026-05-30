@@ -141,6 +141,11 @@ label {
   line-height: 1.35;
 }
 
+label[hidden],
+[hidden] {
+  display: none !important;
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -297,8 +302,18 @@ label {
 }
 
 .wide-field,
-.form-actions {
+.form-actions,
+.form-subhead {
   grid-column: 1 / -1;
+}
+
+.form-subhead {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .form-actions {

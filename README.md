@@ -54,10 +54,11 @@ retention, usage tracking, and the admin dashboard.
 ```
 Slack ──┐
         ├─> OpenClaw gateway ──> Operant policy + audit ──> Postgres
-Teams ──┘                    └─> Pipedream Connect (per-user OAuth*)
+Teams ──┘                    └─> Pipedream Connect (per-user OAuth)
 ```
 
-*Per-user Pipedream OAuth is keyed to the Slack identity today.
+Pipedream Connect OAuth, tool policy, and audit all key on the active chat
+user's principal (a Slack member ID or a Teams AAD ID).
 
 
 Slack app tokens, bot tokens, and model API keys live AES-256-GCM
@@ -111,7 +112,7 @@ workspace or to a specific Slack user.
 | --- | --- |
 | Slack + Teams runtime | OpenClaw gateway (Slack Socket Mode, Teams webhook), sessions, tasks |
 | App marketplace | Pipedream catalog search and curated local app cards |
-| Per-user OAuth | Pipedream Connect accounts keyed by each Slack user |
+| Per-user OAuth | Pipedream Connect accounts keyed by each chat user (Slack member ID or Teams AAD ID) |
 | App/action policy | `pipedream:<app>` tool rules and role/user scopes |
 | Approvals | Named approvers, minimum approvals, dashboard decisions |
 | Audit and usage | Postgres audit log, sessions/jobs, per-user token and cost rows |

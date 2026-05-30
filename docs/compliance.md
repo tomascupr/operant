@@ -66,12 +66,12 @@ whose behalf a tool ran are attestable:
   deny, disconnect, plugin invocation, wipe revocation) and on per-user
   SecretRef resolves, and is indexed for per-user queries. Workspace-level
   events (catalog search, revocation-failed summaries) leave it `null`.
-- The Teams equivalent has no dedicated column today. For Microsoft Teams
-  actions, the AAD principal is recorded only inside the audit row's
-  `metadata` field (`metadata.teamsAadUserId`), not in an indexed `actor_*`
-  column. So Slack per-user attribution is column-indexed
-  (`actor_slack_user_id`) while Teams per-user attribution is currently
-  metadata-only and not indexed.
+- `actor_teams_aad_user_id` is the Teams equivalent, the Microsoft Entra (AAD)
+  principal an action was performed for. It is populated on the per-user
+  Pipedream touches and is indexed for per-user queries, mirroring
+  `actor_slack_user_id`, so Slack and Teams per-user attribution are both
+  column-indexed. A given audit row carries whichever column matches the active
+  platform; the other is `null`.
 
 `metadata.slackUserId` is retained alongside the column for back-compat with
 rows written before the column existed.

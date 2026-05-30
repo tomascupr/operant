@@ -287,10 +287,11 @@ with `--msteams-webhook-bind`/`--msteams-webhook-port`).
    placeholder UUIDs with the Azure Bot app ID). Full walkthrough and the v1 RSC
    permission scope live in [deploy/teams/README.md](../deploy/teams/README.md).
 
-Slack remains fully supported. Pipedream Connect per-user tools are currently
-wired to the Slack sender identity (the plugin maps the requester to a Slack
-user id, which Pipedream uses as the external user id); per-user Pipedream OAuth
-is not yet exercised on the Teams channel.
+Slack remains fully supported. Pipedream Connect per-user tools key on the
+active chat user's principal on both platforms: the plugin forwards the raw
+principal id (a Slack member id or a Teams AAD id) and the control plane resolves
+the platform from its shape, so Pipedream OAuth isolation, tool policy, and audit
+all attribute the correct Slack or Teams user.
 
 ### Teams live check
 

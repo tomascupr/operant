@@ -62,7 +62,7 @@ function deps(overrides: Partial<PipedreamToolDependencies> = {}): PipedreamTool
   return {
     pipedreamClient: stubPipedreamClient(),
     operantClient: stubOperantClient(() => "allow"),
-    slackUserId: "U_alice",
+    principalId: "U_alice",
     ...overrides,
   };
 }
@@ -133,7 +133,7 @@ test("connect_app returns a short-lived connect link for the requesting Slack us
   }));
   const result = await tool.execute("call-1", { app: "gmail" });
   const body = parseFirstTextBlock(result) as { connectLinkUrl: string };
-  assert.deepEqual(received, { slackUserId: "U_alice", appSlug: "gmail" });
+  assert.deepEqual(received, { principalId: "U_alice", appSlug: "gmail" });
   assert.match(body.connectLinkUrl, /connect\.html\?token=ctok_demo/);
 });
 
@@ -150,7 +150,7 @@ test("list_connections returns the requesting Slack user's Pipedream accounts", 
   }));
   const result = await tool.execute("call-1", { app: "github" });
   const body = parseFirstTextBlock(result) as { accounts: Array<{ app: string }> };
-  assert.deepEqual(received, { slackUserId: "U_alice", app: "github" });
+  assert.deepEqual(received, { principalId: "U_alice", app: "github" });
   assert.equal(body.accounts[0]?.app, "github");
 });
 
@@ -206,11 +206,11 @@ test("run_action surfaces Pipedream connect-link responses verbatim", async () =
   assert.match((block as { text: string }).text, /connect\.html\?token=ctok_demo/);
 });
 
-test("run_action refuses to call Pipedream without a slackUserId in session context", async () => {
+test("run_action refuses to call Pipedream without a principal in session context", async () => {
   const pipedreamClient = stubPipedreamClient();
   const tool = createPipedreamRunActionTool(deps({
     pipedreamClient,
-    slackUserId: null,
+    principalId: null,
     operantClient: {
       ...stubOperantClient(() => "allow"),
       getUserContext: async () => ({ sessionKey: "k", workspaceId: "w", slackUserId: null, roles: [] }),
@@ -221,7 +221,7 @@ test("run_action refuses to call Pipedream without a slackUserId in session cont
   }));
   const result = await tool.execute("call-1", { toolName: "gmail-send-email" });
   const body = parseFirstTextBlock(result) as { error: string };
-  assert.equal(body.error, "missing_slack_user_context");
+  assert.equal(body.error, "missing_principal_context");
   assert.equal(pipedreamClient.callCalls.length, 0);
 });
 

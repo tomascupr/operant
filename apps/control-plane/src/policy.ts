@@ -7,19 +7,50 @@ import type {
   ToolPolicyRecord,
 } from "./schema.js";
 
-export function evaluateToolOnly(input: { tool: string; action: string }, policies: {
-  toolPolicies: ToolPolicyRecord[];
-}): PolicyDecision {
-  const matching = policies.toolPolicies.filter((policy) => {
-    return policy.tool === input.tool && (policy.action === input.action || policy.action === "*");
-  });
-  const denied = matching.find((policy) => policy.effect === "deny");
-  if (denied) return { effect: "deny", reasons: [`Tool policy denies ${input.tool}:${input.action}.`] };
-  if (matching.some((policy) => policy.effect === "approval_required")) {
-    return { effect: "approval_required", reasons: [`Tool policy requires approval for ${input.tool}:${input.action}.`] };
+export interface ToolPolicyPrincipal {
+  platform?: ChatPlatform;
+  slackUserId?: string | null;
+  teamsAadUserId?: string | null;
+  userRoleNames?: string[];
+}
+
+// Tool-policy gate shared by the dashboard (evaluatePolicy) and the plugin/internal
+// surfaces (evaluateToolOnly). Scoped policies (per Slack/Teams user or per role) only
+// apply to a matching principal, and a scoped grant with no match denies rather than
+// silently falling through to a global allow.
+export function evaluateToolOnly(
+  input: { tool: string; action: string } & ToolPolicyPrincipal,
+  policies: { toolPolicies: ToolPolicyRecord[] },
+): PolicyDecision {
+  const platform: ChatPlatform = input.platform ?? "slack";
+  const principalId = (platform === "msteams" ? input.teamsAadUserId : input.slackUserId) ?? "";
+  return evaluateToolPolicies(platform, principalId, input.userRoleNames ?? [], input.tool, input.action, policies.toolPolicies);
+}
+
+function evaluateToolPolicies(
+  platform: ChatPlatform,
+  principalId: string,
+  userRoleNames: string[],
+  tool: string,
+  action: string,
+  toolPolicies: ToolPolicyRecord[],
+): PolicyDecision {
+  const matching = toolPolicies.filter((policy) => policy.tool === tool && (policy.action === action || policy.action === "*"));
+  const applicable = matching.filter((policy) => toolPolicyAppliesToUser(policy, platform, principalId, userRoleNames));
+  if (applicable.some((policy) => policy.effect === "deny")) {
+    return { effect: "deny", reasons: [`Tool policy denies ${tool}:${action} for this chat user or role.`] };
   }
-  const allowed = matching.some((policy) => policy.effect === "allow");
-  return { effect: "allow", reasons: allowed ? [`Tool policy allows ${input.tool}:${input.action}.`] : [] };
+  if (applicable.some((policy) => policy.effect === "approval_required")) {
+    return { effect: "approval_required", reasons: [`Tool policy requires approval for ${tool}:${action} for this chat user or role.`] };
+  }
+  if (applicable.some((policy) => policy.effect === "allow")) {
+    return { effect: "allow", reasons: [`Tool policy allows ${tool}:${action} for this chat user or role.`] };
+  }
+  if (applicable.length === 0 && matching.some(isScopedGrantPolicy)) {
+    const platformLabel = platform === "msteams" ? "Teams" : "Slack";
+    return { effect: "deny", reasons: [`${platformLabel} user ${principalId} has no role or user entitlement for ${tool}:${action}.`] };
+  }
+  return { effect: "allow", reasons: [] };
 }
 
 function inputPlatform(input: PolicyEvaluationInput): ChatPlatform {
@@ -98,30 +129,12 @@ export function evaluatePolicy(input: PolicyEvaluationInput, policies: {
   }
 
   if (input.tool) {
-    const matchingToolPolicies = policies.toolPolicies.filter((policy) => {
-      return policy.tool === input.tool && (policy.action === input.action || policy.action === "*");
-    });
-    const applicableToolPolicies = matchingToolPolicies.filter((policy) => toolPolicyAppliesToUser(policy, input));
-    const denied = applicableToolPolicies.find((policy) => policy.effect === "deny");
-    if (denied) {
-      return {
-        effect: "deny",
-        reasons: [`Tool policy denies ${input.tool}:${input.action} for this chat user or role.`],
-      };
+    const toolDecision = evaluateToolPolicies(platform, principalId, input.userRoleNames ?? [], input.tool, input.action, policies.toolPolicies);
+    if (toolDecision.effect === "deny") return toolDecision;
+    if (toolDecision.effect === "approval_required") {
+      return { effect: "approval_required", reasons: [...reasons, ...toolDecision.reasons] };
     }
-    if (applicableToolPolicies.some((policy) => policy.effect === "approval_required")) {
-      return {
-        effect: "approval_required",
-        reasons: [...reasons, `Tool policy requires approval for ${input.tool}:${input.action} for this chat user or role.`],
-      };
-    }
-    if (applicableToolPolicies.some((policy) => policy.effect === "allow")) reasons.push(`Tool policy allows ${input.tool}:${input.action} for this chat user or role.`);
-    if (applicableToolPolicies.length === 0 && matchingToolPolicies.some(isScopedGrantPolicy)) {
-      return {
-        effect: "deny",
-        reasons: [`${platformLabel} user ${principalId} has no role or user entitlement for ${input.tool}:${input.action}.`],
-      };
-    }
+    reasons.push(...toolDecision.reasons);
   }
 
   return { effect: "allow", reasons };
@@ -135,15 +148,14 @@ function isScopedGrantPolicy(policy: ToolPolicyRecord): boolean {
   return isScopedToolPolicy(policy) && policy.effect !== "deny";
 }
 
-function toolPolicyAppliesToUser(policy: ToolPolicyRecord, input: PolicyEvaluationInput): boolean {
+function toolPolicyAppliesToUser(policy: ToolPolicyRecord, platform: ChatPlatform, principalId: string, userRoleNames: string[]): boolean {
   if (!isScopedToolPolicy(policy)) return true;
-  const principalId = inputPrincipalId(input);
-  if (inputPlatform(input) === "msteams") {
+  if (platform === "msteams") {
     if ((policy.teamsAadUserIds ?? []).includes(principalId)) return true;
   } else if ((policy.slackUserIds ?? []).includes(principalId)) {
     return true;
   }
-  const userRoles = new Set(input.userRoleNames ?? []);
+  const userRoles = new Set(userRoleNames);
   return (policy.roleNames ?? []).some((roleName) => userRoles.has(roleName));
 }
 

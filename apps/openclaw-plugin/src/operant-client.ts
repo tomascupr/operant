@@ -13,7 +13,7 @@ export interface PluginUserContext {
 }
 
 export interface PolicyCheckInput {
-  slackUserId: string | null;
+  principalId: string | null;
   tool: string;
   action: string;
 }
@@ -47,8 +47,8 @@ export interface OperantClient {
   getUserContext(sessionKey: string): Promise<PluginUserContext>;
   checkPolicy(input: PolicyCheckInput): Promise<PolicyDecision>;
   searchPipedreamApps(input: { q?: string; limit?: number }): Promise<{ apps: PipedreamAppSummary[]; pageInfo?: Record<string, unknown> | null }>;
-  createPipedreamConnectToken(input: { slackUserId: string; appSlug?: string }): Promise<PipedreamConnectTokenResult>;
-  listPipedreamAccounts(input: { slackUserId: string; app?: string }): Promise<{ accounts: PipedreamAccountSummary[] }>;
+  createPipedreamConnectToken(input: { principalId: string; appSlug?: string }): Promise<PipedreamConnectTokenResult>;
+  listPipedreamAccounts(input: { principalId: string; app?: string }): Promise<{ accounts: PipedreamAccountSummary[] }>;
 }
 
 export interface OperantClientOptions {

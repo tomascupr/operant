@@ -43,16 +43,16 @@ test("getUserContext returns slackUserId null when the session is unknown", asyn
   });
 });
 
-test("checkPolicy forwards slackUserId, tool, action and returns the decision", async () => {
+test("checkPolicy forwards principalId, tool, action and returns the decision", async () => {
   let receivedBody: unknown;
   await withJsonStub((_req, body) => {
     receivedBody = body;
     return { status: 200, body: { effect: "deny", reasons: ["Tool policy denies gmail:send."] } };
   }, async (baseUrl) => {
     const client = createOperantClient({ baseUrl, token: "t" });
-    const decision = await client.checkPolicy({ slackUserId: "U1", tool: "gmail", action: "send" });
+    const decision = await client.checkPolicy({ principalId: "U1", tool: "gmail", action: "send" });
     assert.equal(decision.effect, "deny");
-    assert.deepEqual(receivedBody, { slackUserId: "U1", tool: "gmail", action: "send" });
+    assert.deepEqual(receivedBody, { principalId: "U1", tool: "gmail", action: "send" });
   });
 });
 
@@ -73,8 +73,8 @@ test("Pipedream helper methods call the internal marketplace endpoints", async (
   }, async (baseUrl) => {
     const client = createOperantClient({ baseUrl, token: "t" });
     assert.equal((await client.searchPipedreamApps({ q: "gmail" })).apps[0]?.slug, "gmail");
-    assert.match((await client.createPipedreamConnectToken({ slackUserId: "U1", appSlug: "gmail" })).connectLinkUrl, /ctok_demo/);
-    assert.equal((await client.listPipedreamAccounts({ slackUserId: "U1", app: "gmail" })).accounts[0]?.id, "apn_1");
+    assert.match((await client.createPipedreamConnectToken({ principalId: "U1", appSlug: "gmail" })).connectLinkUrl, /ctok_demo/);
+    assert.equal((await client.listPipedreamAccounts({ principalId: "U1", app: "gmail" })).accounts[0]?.id, "apn_1");
   });
   assert.deepEqual(urls, [
     "/internal/plugin/pipedream/apps",

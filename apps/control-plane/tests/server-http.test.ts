@@ -169,7 +169,7 @@ test("/api/bootstrap accepts a valid admin token and writes the bootstrap audit 
       assert.equal(response.body.workspaceId, workspaceId);
       assert.equal(auditRows.length, 1);
       // audit() INSERT columns: ...actor_user_id($3), actor_slack_user_id($4), event_type($5) -> params index 4.
-      assert.equal(auditRows[0][4], "bootstrap.completed");
+      assert.equal(auditRows[0][5], "bootstrap.completed");
     });
   });
 });
@@ -304,7 +304,7 @@ test("workspace API routes return RBAC denial details for authenticated users wi
       assert.deepEqual(response.body.roles, ["viewer"]);
       assert.equal(auditRows.length, 1);
       // event_type is params index 4 after actor_slack_user_id was added at index 3.
-      assert.equal(auditRows[0][4], "rbac.denied");
+      assert.equal(auditRows[0][5], "rbac.denied");
     });
   });
 });
@@ -354,6 +354,7 @@ test("plugin policy-check audits pipedream.invocation with the Slack principal a
     if (seeded) return seeded;
     const workspace = workspaceJoinQuery(sql);
     if (workspace) return workspace;
+    if (/SELECT DISTINCT r\.name/.test(sql)) return result();
     if (/FROM tool_policies/.test(sql)) return result();
     if (/INSERT INTO audit_logs/.test(sql)) {
       auditRows.push(params);
@@ -367,14 +368,16 @@ test("plugin policy-check audits pipedream.invocation with the Slack principal a
       const response = await requestJson(baseUrl, "/internal/plugin/policy-check", {
         method: "POST",
         headers: { authorization: "Bearer internal-secret" },
-        body: JSON.stringify({ tool: "pipedream:github", action: "list", slackUserId: "U_PLUGIN" }),
+        body: JSON.stringify({ tool: "pipedream:github", action: "list", principalId: "U_PLUGIN" }),
       });
       assert.equal(response.response.status, 200);
       assert.equal(auditRows.length, 1);
-      // INSERT params: actor_user_id($3 -> idx 2), actor_slack_user_id($4 -> idx 3), event_type($5 -> idx 4), ... metadata($9 -> idx 8).
+      // INSERT params idx: actor_slack_user_id(3), actor_teams_aad_user_id(4), event_type(5), ... metadata(9).
       assert.equal(auditRows[0][3], "U_PLUGIN");
-      assert.equal(auditRows[0][4], "pipedream.invocation");
-      assert.equal((auditRows[0][8] as Record<string, unknown>).slackUserId, "U_PLUGIN");
+      assert.equal(auditRows[0][4], null);
+      assert.equal(auditRows[0][5], "pipedream.invocation");
+      assert.equal((auditRows[0][9] as Record<string, unknown>).principalId, "U_PLUGIN");
+      assert.equal((auditRows[0][9] as Record<string, unknown>).platform, "slack");
     });
   });
 });
@@ -666,9 +669,9 @@ test("a dual-linked approver's decision attributes to the Teams principal when t
     });
     assert.equal(response.response.status, 200);
     assert.equal(response.body.status, "approved");
-    const approvedAudit = decisionAuditRows.find((row) => row[4] === "approval.approved");
+    const approvedAudit = decisionAuditRows.find((row) => row[5] === "approval.approved");
     assert.ok(approvedAudit, "expected an approval.approved audit row");
-    const metadata = approvedAudit![8] as Record<string, unknown>;
+    const metadata = approvedAudit![9] as Record<string, unknown>;
     // The active session is Teams, so the attributed principal is the Teams tag.
     assert.equal(metadata.actorPrincipal, `msteams:${teamsOwnerAadId}`);
   });

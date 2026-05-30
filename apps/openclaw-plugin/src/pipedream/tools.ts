@@ -6,7 +6,7 @@ import type { PipedreamClient, PipedreamToolCallResult, PipedreamToolListing } f
 export interface PipedreamToolDependencies {
   pipedreamClient: PipedreamClient;
   operantClient: OperantClient;
-  slackUserId: string | null;
+  principalId: string | null;
 }
 
 export function deriveAppAction(toolName: string): { app: string; action: string } {
@@ -62,7 +62,7 @@ async function evaluatePipedreamPolicy(
   action: string,
 ): Promise<PolicyDecision> {
   return deps.operantClient.checkPolicy({
-    slackUserId: deps.slackUserId,
+    principalId: deps.principalId,
     tool: `pipedream:${app}`,
     action,
   });
@@ -75,11 +75,11 @@ export function createPipedreamListActionsTool(deps: PipedreamToolDependencies) 
     description: "List Pipedream Connect tools available for a given app slug, filtered by Operant policy. Pipedream requires an explicit app (e.g. gmail, slack, notion). Use this before pipedream_run_action to discover toolName + arguments.",
     parameters: ListActionsParameters,
     execute: async (_toolCallId: string, rawParams: unknown) => {
-      if (!deps.slackUserId) return jsonResult({ error: "missing_slack_user_context" });
+      if (!deps.principalId) return jsonResult({ error: "missing_principal_context" });
       const params = rawParams as { app?: unknown };
       const app = typeof params.app === "string" ? params.app.trim() : "";
       if (!app) return jsonResult({ error: "missing_app" });
-      const entries = await deps.pipedreamClient.listTools(deps.slackUserId, app);
+      const entries = await deps.pipedreamClient.listTools(deps.principalId, app);
       const settled = await Promise.allSettled(
         entries.map(async (entry: PipedreamToolListing) => {
           const { action } = deriveAppAction(entry.name);
@@ -126,11 +126,11 @@ export function createPipedreamConnectAppTool(deps: PipedreamToolDependencies) {
     description: "Create a short-lived Pipedream Connect link for the requesting Slack user to OAuth a SaaS account.",
     parameters: ConnectAppParameters,
     execute: async (_toolCallId: string, rawParams: unknown) => {
-      if (!deps.slackUserId) return jsonResult({ error: "missing_slack_user_context" });
+      if (!deps.principalId) return jsonResult({ error: "missing_principal_context" });
       const params = rawParams as { app?: unknown };
       const app = typeof params.app === "string" ? params.app.trim() : "";
       if (!app) return jsonResult({ error: "missing_app" });
-      const result = await deps.operantClient.createPipedreamConnectToken({ slackUserId: deps.slackUserId, appSlug: app })
+      const result = await deps.operantClient.createPipedreamConnectToken({ principalId: deps.principalId, appSlug: app })
         .catch((error) => ({ error: "connect_token_failed", message: error instanceof Error ? error.message : "unknown error" }));
       return jsonResult(result);
     },
@@ -144,10 +144,10 @@ export function createPipedreamListConnectionsTool(deps: PipedreamToolDependenci
     description: "List the requesting Slack user's connected Pipedream accounts, optionally filtered by app slug.",
     parameters: ListConnectionsParameters,
     execute: async (_toolCallId: string, rawParams: unknown) => {
-      if (!deps.slackUserId) return jsonResult({ error: "missing_slack_user_context" });
+      if (!deps.principalId) return jsonResult({ error: "missing_principal_context" });
       const params = rawParams as { app?: unknown };
       const app = typeof params.app === "string" && params.app.trim() ? params.app.trim() : undefined;
-      const result = await deps.operantClient.listPipedreamAccounts({ slackUserId: deps.slackUserId, app })
+      const result = await deps.operantClient.listPipedreamAccounts({ principalId: deps.principalId, app })
         .catch((error) => ({ error: "connections_lookup_failed", message: error instanceof Error ? error.message : "unknown error" }));
       return jsonResult(result);
     },
@@ -172,7 +172,7 @@ export function createPipedreamRunActionTool(deps: PipedreamToolDependencies) {
       const params = rawParams as { toolName?: unknown; args?: unknown };
       const toolName = typeof params.toolName === "string" ? params.toolName : "";
       if (!toolName) return jsonResult({ error: "missing_toolName" });
-      if (!deps.slackUserId) return jsonResult({ error: "missing_slack_user_context", toolName });
+      if (!deps.principalId) return jsonResult({ error: "missing_principal_context", toolName });
       const { app, action } = deriveAppAction(toolName);
       const decision = await evaluatePipedreamPolicy(deps, app, action).catch(() => null);
       if (!decision) return jsonResult({ error: "policy_check_failed", toolName });
@@ -185,7 +185,7 @@ export function createPipedreamRunActionTool(deps: PipedreamToolDependencies) {
       const args = params.args && typeof params.args === "object" && !Array.isArray(params.args)
         ? (params.args as Record<string, unknown>)
         : undefined;
-      const result = await deps.pipedreamClient.callTool(deps.slackUserId, toolName, args, app);
+      const result = await deps.pipedreamClient.callTool(deps.principalId, toolName, args, app);
       return wrapPipedreamResult(result);
     },
   };

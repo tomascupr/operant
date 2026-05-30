@@ -199,6 +199,46 @@ test("evaluateToolOnly prefers deny over approval_required when both match", () 
   assert.equal(decision.effect, "deny");
 });
 
+test("evaluateToolOnly: a user-scoped deny only blocks the targeted Slack user, not everyone", () => {
+  const blocked = evaluateToolOnly(
+    { tool: "pipedream:github", action: "list", platform: "slack", slackUserId: "U_BLOCKED" },
+    { toolPolicies: [{ tool: "pipedream:github", action: "*", effect: "deny", slackUserIds: ["U_BLOCKED"] }] },
+  );
+  assert.equal(blocked.effect, "deny");
+  const other = evaluateToolOnly(
+    { tool: "pipedream:github", action: "list", platform: "slack", slackUserId: "U_OTHER" },
+    { toolPolicies: [{ tool: "pipedream:github", action: "*", effect: "deny", slackUserIds: ["U_BLOCKED"] }] },
+  );
+  assert.equal(other.effect, "allow");
+});
+
+test("evaluateToolOnly: a role-scoped allow grants the role and denies users without it", () => {
+  const member = evaluateToolOnly(
+    { tool: "pipedream:github", action: "list", platform: "slack", slackUserId: "U1", userRoleNames: ["ops"] },
+    { toolPolicies: [{ tool: "pipedream:github", action: "*", effect: "allow", roleNames: ["ops"] }] },
+  );
+  assert.equal(member.effect, "allow");
+  const outsider = evaluateToolOnly(
+    { tool: "pipedream:github", action: "list", platform: "slack", slackUserId: "U2", userRoleNames: ["member"] },
+    { toolPolicies: [{ tool: "pipedream:github", action: "*", effect: "allow", roleNames: ["ops"] }] },
+  );
+  assert.equal(outsider.effect, "deny");
+});
+
+test("evaluateToolOnly: a Teams-scoped policy matches the active Teams AAD principal only", () => {
+  const aad = "44444444-4444-4444-8444-444444444444";
+  const teamsUser = evaluateToolOnly(
+    { tool: "pipedream:github", action: "list", platform: "msteams", teamsAadUserId: aad },
+    { toolPolicies: [{ tool: "pipedream:github", action: "*", effect: "approval_required", teamsAadUserIds: [aad] }] },
+  );
+  assert.equal(teamsUser.effect, "approval_required");
+  const otherTeamsUser = evaluateToolOnly(
+    { tool: "pipedream:github", action: "list", platform: "msteams", teamsAadUserId: "55555555-5555-4555-8555-555555555555" },
+    { toolPolicies: [{ tool: "pipedream:github", action: "*", effect: "approval_required", teamsAadUserIds: [aad] }] },
+  );
+  assert.equal(otherTeamsUser.effect, "deny");
+});
+
 test("approval requirements summarize matching approval policies", () => {
   assert.equal(wildcardMatches("exec:*", "exec:shell"), true);
   assert.equal(wildcardMatches("exec:*", "slack:pins"), false);

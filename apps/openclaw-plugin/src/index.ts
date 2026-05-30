@@ -87,7 +87,10 @@ export default definePluginEntry({
     const factoryDeps = (ctx: { requesterSenderId?: string }) => ({
       pipedreamClient: pipedream.pipedreamClient,
       operantClient,
-      slackUserId: ctx.requesterSenderId ?? null,
+      // The chat user's raw principal id (a Slack member id or a Teams AAD id). The
+      // control plane resolves the platform from its shape, so policy and audit
+      // attribute Teams users correctly instead of as Slack actors.
+      principalId: ctx.requesterSenderId ?? null,
     });
     api.registerTool((ctx) => createPipedreamSearchAppsTool(factoryDeps(ctx)));
     api.registerTool((ctx) => createPipedreamConnectAppTool(factoryDeps(ctx)));

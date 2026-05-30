@@ -219,7 +219,7 @@ export const pluginUserContextRequestSchema = z.object({
 export type PluginUserContextRequest = z.infer<typeof pluginUserContextRequestSchema>;
 
 export const pluginPolicyCheckRequestSchema = z.object({
-  slackUserId: slackIdSchema.nullable(),
+  principalId: chatPrincipalIdSchema.nullable(),
   tool: policyIdentifierSchema,
   action: policyIdentifierSchema,
 });

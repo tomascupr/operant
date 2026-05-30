@@ -27,6 +27,7 @@ import { applyRetentionPurge, applyRetentionWipe, buildRetentionExport, retentio
 import { decryptSecret, encryptSecret, parseMasterKey } from "./secrets.js";
 import {
   chatPlatforms,
+  chatPrincipalIdSchema,
   credentialInputSchema,
   customRoleUpsertSchema,
   integrationCredentialInputSchema,
@@ -318,6 +319,7 @@ async function audit(pool: Queryable, input: {
   workspaceId?: string;
   actorUserId?: string | null;
   actorSlackUserId?: string | null;
+  actorTeamsAadUserId?: string | null;
   eventType: string;
   resourceType: string;
   resourceId?: string;
@@ -325,13 +327,14 @@ async function audit(pool: Queryable, input: {
   metadata?: Record<string, unknown>;
 }) {
   await pool.query(
-    `INSERT INTO audit_logs (company_id, workspace_id, actor_user_id, actor_slack_user_id, event_type, resource_type, resource_id, outcome, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    `INSERT INTO audit_logs (company_id, workspace_id, actor_user_id, actor_slack_user_id, actor_teams_aad_user_id, event_type, resource_type, resource_id, outcome, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       input.companyId ?? null,
       input.workspaceId ?? null,
       input.actorUserId ?? null,
       input.actorSlackUserId ?? null,
+      input.actorTeamsAadUserId ?? null,
       input.eventType,
       input.resourceType,
       input.resourceId ?? null,
@@ -339,6 +342,49 @@ async function audit(pool: Queryable, input: {
       redactRecordForPersistence(input.metadata ?? {}),
     ],
   );
+}
+
+// The plugin sends the active chat user's raw principal id; resolve which platform it
+// belongs to by shape (Teams AAD ids are UUIDs, Slack ids are not) so policy and audit
+// attribute it correctly instead of treating every principal as a Slack user.
+function resolvePluginPrincipal(rawId: string | null | undefined): ChatPrincipal | null {
+  if (!rawId) return null;
+  const teams = teamsAadUserIdSchema.safeParse(rawId);
+  if (teams.success) return { platform: "msteams", principalId: teams.data };
+  const slack = slackIdSchema.safeParse(rawId);
+  if (slack.success) return { platform: "slack", principalId: slack.data };
+  return null;
+}
+
+function principalAuditIds(principal: ChatPrincipal | null): { actorSlackUserId: string | null; actorTeamsAadUserId: string | null } {
+  return {
+    actorSlackUserId: principal?.platform === "slack" ? principal.principalId : null,
+    actorTeamsAadUserId: principal?.platform === "msteams" ? principal.principalId : null,
+  };
+}
+
+function principalToolPolicyInput(principal: ChatPrincipal | null, userRoleNames: string[]) {
+  const ids = principalAuditIds(principal);
+  return {
+    platform: principal?.platform ?? "slack",
+    slackUserId: ids.actorSlackUserId,
+    teamsAadUserId: ids.actorTeamsAadUserId,
+    userRoleNames,
+  };
+}
+
+async function loadPrincipalToolContext(
+  pool: Database,
+  workspace: { id: string; company_id: string },
+  principal: ChatPrincipal | null,
+): Promise<{ toolPolicies: ToolPolicyRecord[]; roleNames: string[] }> {
+  const [toolPolicies, roleNames] = await Promise.all([
+    loadToolPolicies(pool, workspace.id),
+    principal
+      ? loadChatPrincipalRoleNames(pool, workspace.company_id, workspace.id, principal.platform, principal.principalId)
+      : Promise.resolve<string[]>([]),
+  ]);
+  return { toolPolicies, roleNames };
 }
 
 type ChatPrincipal = {
@@ -1632,7 +1678,7 @@ async function handlePipedreamAppActions(context: RouteContext): Promise<void> {
   ]);
   const result = tools.flatMap((tool) => {
     const action = pipedreamActionFromToolName(appSlug, tool.name);
-    const decision = evaluateToolOnly({ tool: `pipedream:${appSlug}`, action }, { toolPolicies });
+    const decision = evaluateToolOnly({ tool: `pipedream:${appSlug}`, action, platform: "slack", slackUserId: allowed.actorSlackUserId, userRoleNames: allowed.roles }, { toolPolicies });
     return decision.effect === "deny"
       ? []
       : [{
@@ -1661,7 +1707,7 @@ async function handlePipedreamConnectToken(context: RouteContext): Promise<void>
   // the plugin connect path so the public and plugin surfaces enforce the same rule.
   if (body.appSlug) {
     const toolPolicies = await loadToolPolicies(state.pool, workspace.id);
-    const decision = evaluateToolOnly({ tool: `pipedream:${body.appSlug}`, action: "*" }, { toolPolicies });
+    const decision = evaluateToolOnly({ tool: `pipedream:${body.appSlug}`, action: "*", platform: "slack", slackUserId: allowed.actorSlackUserId, userRoleNames: allowed.roles }, { toolPolicies });
     if (decision.effect === "deny") {
       await audit(state.pool, {
         companyId: workspace.company_id,
@@ -2891,14 +2937,15 @@ async function handlePluginPolicyCheck({ req, res, state }: RouteContext): Promi
   }
   const input = pluginPolicyCheckRequestSchema.parse(await readJson(req));
   const workspace = await getWorkspace(state.pool);
-  const toolPolicies = await loadToolPolicies(state.pool, workspace.id);
-  const decision = evaluateToolOnly({ tool: input.tool, action: input.action }, { toolPolicies });
+  const principal = resolvePluginPrincipal(input.principalId);
+  const { toolPolicies, roleNames } = await loadPrincipalToolContext(state.pool, workspace, principal);
+  const decision = evaluateToolOnly({ tool: input.tool, action: input.action, ...principalToolPolicyInput(principal, roleNames) }, { toolPolicies });
   if (input.tool.startsWith("pipedream:")) {
     const app = input.tool.slice("pipedream:".length);
     await audit(state.pool, {
       companyId: workspace.company_id,
       workspaceId: workspace.id,
-      actorSlackUserId: input.slackUserId,
+      ...principalAuditIds(principal),
       eventType: "pipedream.invocation",
       resourceType: "pipedream_tool",
       resourceId: `${input.tool}/${input.action}`,
@@ -2907,7 +2954,8 @@ async function handlePluginPolicyCheck({ req, res, state }: RouteContext): Promi
         app,
         action: input.action,
         tool: input.tool,
-        slackUserId: input.slackUserId,
+        platform: principal?.platform ?? null,
+        principalId: principal?.principalId ?? input.principalId,
         status: decision.effect,
         reasons: decision.reasons,
       },
@@ -2945,22 +2993,24 @@ async function handlePluginPipedreamConnectToken({ req, res, state }: RouteConte
     return;
   }
   const input = z.object({
-    slackUserId: slackIdSchema,
+    principalId: chatPrincipalIdSchema,
     appSlug: pipedreamAppSlugSchema.optional(),
   }).parse(await readJson(req));
   const workspace = await getWorkspace(state.pool);
+  const principal = resolvePluginPrincipal(input.principalId);
+  const auditIds = principalAuditIds(principal);
   if (input.appSlug) {
-    const toolPolicies = await loadToolPolicies(state.pool, workspace.id);
-    const decision = evaluateToolOnly({ tool: `pipedream:${input.appSlug}`, action: "*" }, { toolPolicies });
+    const { toolPolicies, roleNames } = await loadPrincipalToolContext(state.pool, workspace, principal);
+    const decision = evaluateToolOnly({ tool: `pipedream:${input.appSlug}`, action: "*", ...principalToolPolicyInput(principal, roleNames) }, { toolPolicies });
     if (decision.effect === "deny") {
       await audit(state.pool, {
         companyId: workspace.company_id,
         workspaceId: workspace.id,
-        actorSlackUserId: input.slackUserId,
+        ...auditIds,
         eventType: "pipedream.connect_token_denied",
         resourceType: "pipedream_account",
         outcome: "deny",
-        metadata: { app: input.appSlug, slackUserId: input.slackUserId, reasons: decision.reasons },
+        metadata: { app: input.appSlug, platform: principal?.platform ?? null, principalId: input.principalId, reasons: decision.reasons },
       });
       sendJson(res, 403, { error: "policy_denied", reasons: decision.reasons });
       return;
@@ -2969,16 +3019,16 @@ async function handlePluginPipedreamConnectToken({ req, res, state }: RouteConte
   const client = pipedreamClientForResponse(res);
   if (!client) return;
   const token = await client.createConnectToken({
-    externalUserId: input.slackUserId,
+    externalUserId: input.principalId,
     appSlug: input.appSlug,
   });
   await audit(state.pool, {
     companyId: workspace.company_id,
     workspaceId: workspace.id,
-    actorSlackUserId: input.slackUserId,
+    ...auditIds,
     eventType: "pipedream.connect_token_created",
     resourceType: "pipedream_account",
-    metadata: { app: input.appSlug ?? null, slackUserId: input.slackUserId, expiresAt: token.expiresAt, source: "plugin" },
+    metadata: { app: input.appSlug ?? null, platform: principal?.platform ?? null, principalId: input.principalId, expiresAt: token.expiresAt, source: "plugin" },
   });
   sendJson(res, 200, {
     app: input.appSlug ?? null,
@@ -2993,12 +3043,12 @@ async function handlePluginPipedreamAccounts({ req, res }: RouteContext): Promis
     return;
   }
   const input = z.object({
-    slackUserId: slackIdSchema,
+    principalId: chatPrincipalIdSchema,
     app: pipedreamAppSlugSchema.optional(),
   }).parse(await readJson(req));
   const client = pipedreamClientForResponse(res);
   if (!client) return;
-  const accounts = await client.listAccounts({ externalUserId: input.slackUserId, app: input.app });
+  const accounts = await client.listAccounts({ externalUserId: input.principalId, app: input.app });
   sendJson(res, 200, { accounts });
 }
 
@@ -3090,7 +3140,7 @@ async function handleUsageSummary(context: RouteContext): Promise<void> {
 const listDefinitions: Record<string, { permission: { action: string; resource: string }; query: string }> = {
   audit_logs: {
     permission: { action: "audit:read", resource: "audit_log" },
-    query: `SELECT id, company_id, workspace_id, actor_user_id, actor_slack_user_id, event_type, resource_type, resource_id, outcome, metadata, created_at
+    query: `SELECT id, company_id, workspace_id, actor_user_id, actor_slack_user_id, actor_teams_aad_user_id, event_type, resource_type, resource_id, outcome, metadata, created_at
             FROM audit_logs
             WHERE workspace_id = $1
             ORDER BY created_at DESC

@@ -1,0 +1,8 @@
+# Default owner for everything
+*                                   @tomascupr
+
+# Security-sensitive areas warrant explicit attention
+/apps/control-plane/src/secrets.ts  @tomascupr
+/apps/control-plane/src/auth.ts     @tomascupr
+/apps/control-plane/migrations/     @tomascupr
+/deploy/                            @tomascupr

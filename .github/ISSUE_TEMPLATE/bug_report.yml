@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in the control plane, dashboard, or OpenClaw plugin is broken
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "For security issues, do NOT use this form. See SECURITY.md."
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Ideally against a clean `pnpm compose:up -- -d` stack.
+      placeholder: |
+        1. pnpm init:env
+        2. pnpm compose:up -- -d
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Chat platform
+      options:
+        - Slack
+        - Microsoft Teams
+        - Both
+        - Not platform-specific
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: pnpm doctor output
+      description: Paste the output of `pnpm doctor` (redact any secrets).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Commit SHA / OPENCLAW_VERSION
+      description: Output of `git rev-parse --short HEAD` and your pinned OPENCLAW_VERSION.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Node version (24+ required), pnpm version (11+ required), Docker Compose version.

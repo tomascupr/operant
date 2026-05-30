@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose a change to the OSS core
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: "For non-trivial changes, please file this before opening a PR (see CONTRIBUTING.md)."
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

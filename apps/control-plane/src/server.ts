@@ -2542,8 +2542,9 @@ async function handleUpsertUser(context: RouteContext): Promise<void> {
          AND (
            ($2::text IS NOT NULL AND slack_user_id = $2)
            OR ($3::text IS NOT NULL AND teams_aad_user_id = $3)
+           OR ($4::text IS NOT NULL AND teams_bot_user_id = $4)
          )`,
-      [workspace.company_id, input.slackUserId ?? null, input.teamsAadUserId ?? null],
+      [workspace.company_id, input.slackUserId ?? null, input.teamsAadUserId ?? null, input.teamsBotUserId ?? null],
     );
     const matchingIds = Array.from(new Set(matchingUsers.rows.map((row) => row.id)));
     if (matchingIds.length > 1) {

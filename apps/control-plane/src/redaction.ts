@@ -1,6 +1,6 @@
 const REDACTED = "[REDACTED]";
 
-const secretLikePattern = /\b(?:xox[a-z]-[A-Za-z0-9-]+|xapp-[A-Za-z0-9-]+|sk-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16}|ctok_[A-Za-z0-9_-]+|tok_[A-Za-z0-9_-]+)\b/g;
+const secretLikePattern = /\b(?:xox[a-z]-[A-Za-z0-9-]+|xapp-[A-Za-z0-9-]+|sk-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16,}|ctok_[A-Za-z0-9_-]+|tok_[A-Za-z0-9_-]+)\b/g;
 const pipedreamConnectLinkPattern = /https?:\/\/pipedream\.com\/_static\/connect\.html\?[^\s"']+/g;
 
 function isSensitiveKey(key: string): boolean {
@@ -10,9 +10,9 @@ function isSensitiveKey(key: string): boolean {
     || normalized.includes("apikey")
     || normalized.includes("password")
     || normalized.includes("secret")
-    || normalized === "authorization"
-    || normalized === "cookie"
-    || normalized === "credential";
+    || normalized.includes("authorization")
+    || normalized.includes("cookie")
+    || normalized.includes("credential");
 }
 
 export function redactForPersistence(value: unknown): unknown {

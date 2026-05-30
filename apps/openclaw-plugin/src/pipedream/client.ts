@@ -73,6 +73,7 @@ const MAX_ERROR_BODY_CHARS = 500;
 export function sanitizePipedreamMessage(text: string): string {
   return text
     .replace(/ctok_[A-Za-z0-9_-]+/g, "ctok_[redacted]")
+    .replace(/tok_[A-Za-z0-9_-]+/g, "tok_[redacted]")
     .replace(/https?:\/\/pipedream\.com\/_static\/connect\.html\?[^\s"']+/g, "<connect-link redacted>");
 }
 

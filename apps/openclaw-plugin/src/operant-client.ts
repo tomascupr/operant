@@ -64,6 +64,8 @@ export class OperantClientError extends Error {
   }
 }
 
+const DEFAULT_TIMEOUT_MS = 10_000;
+
 export function createOperantClient({ baseUrl, token, fetchImpl = fetch }: OperantClientOptions): OperantClient {
   const root = baseUrl.replace(/\/$/, "");
   async function post<T>(endpoint: string, body: unknown): Promise<T> {
@@ -74,6 +76,7 @@ export function createOperantClient({ baseUrl, token, fetchImpl = fetch }: Opera
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");

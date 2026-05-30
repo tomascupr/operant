@@ -257,6 +257,14 @@ test("sanitizePipedreamMessage redacts ctok_ tokens and connect-link URLs", () =
   assert.match(cleaned, /<connect-link redacted>/);
 });
 
+test("sanitizePipedreamMessage redacts tok_ access tokens without mangling ctok_", () => {
+  const cleaned = sanitizePipedreamMessage("access token tok_abc123 and connect token ctok_zzz");
+  assert.ok(!cleaned.includes("tok_abc123"), `should redact tok value, got: ${cleaned}`);
+  assert.ok(!cleaned.includes("ctok_zzz"), `should still redact ctok value, got: ${cleaned}`);
+  assert.match(cleaned, /tok_\[redacted\]/);
+  assert.match(cleaned, /ctok_\[redacted\]/);
+});
+
 test("JSON-RPC error responses throw PipedreamRpcError", async () => {
   await withPipedreamStub(
     (req) => {

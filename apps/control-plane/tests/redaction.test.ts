@@ -25,3 +25,23 @@ test("redacts token-shaped strings and sensitive metadata keys", () => {
   assert.equal(serialized.includes("plain-password"), false);
   assert.equal((redacted.nested as Record<string, unknown>).keepSecretRefId, "workspaces/1/slack/botToken");
 });
+
+test("redacts AWS access keys even when glued to trailing word characters", () => {
+  const redacted = redactRecordForPersistence({
+    standalone: "AKIAIOSFODNN7EXAMPLE",
+    glued: "AKIAIOSFODNN7EXAMPLE12345",
+  });
+  const serialized = JSON.stringify(redacted);
+  assert.equal(serialized.includes("AKIAIOSFODNN7EXAMPLE"), false);
+});
+
+test("redacts set-cookie and plural credentials keys, not just exact matches", () => {
+  const redacted = redactRecordForPersistence({
+    "set-cookie": "session=plain-cookie-value",
+    cookies: "another=plain-cookie",
+    credentials: "plain-credentials-value",
+  }) as Record<string, unknown>;
+  assert.equal(redacted["set-cookie"], "[REDACTED]");
+  assert.equal(redacted.cookies, "[REDACTED]");
+  assert.equal(redacted.credentials, "[REDACTED]");
+});

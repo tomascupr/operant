@@ -20,6 +20,7 @@ the stack env.
 For a live Slack/OpenClaw check:
 
 ```bash
+# compose:live only brings up the stack; it skips the live + post-restart gates run by the verifiers below.
 pnpm compose:live -- --env .env.acme --live-env .env.acme.live
 pnpm live:preflight -- --env .env.acme --live-env .env.acme.live
 pnpm live:e2e -- --env .env.acme --live-env .env.acme.live --require-operant-records --require-dm --require-denied-user --require-slack-approval --require-slack-approval-completion
@@ -289,3 +290,47 @@ click. Use `--skip-approval-probe`, `--skip-dm-probe`,
 usage. `--require-dm`, `--require-denied-user`, `--require-slack-approval`, and
 `--require-slack-approval-completion` keep the live verifier from accepting a
 partial Slack thread reply as final acceptance.
+
+## Microsoft Teams Acceptance
+
+Teams v1 acceptance is manual and human-observed, not an automated verifier like
+the Slack live gates. The script prints a checklist for a human to follow.
+
+1. Copy `deploy/teams/live.env.example` to a private, gitignored live env file
+   (for example `.env.acme.teams.live`); never commit real Teams credentials.
+
+   ```bash
+   cp deploy/teams/live.env.example .env.acme.teams.live
+   ```
+
+   The keys are `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_TENANT_ID`,
+   `MSTEAMS_PUBLIC_MESSAGING_ENDPOINT`, `OPERANT_LIVE_TEAMS_ALLOWED_AAD_USER_ID`,
+   `OPERANT_LIVE_TEAMS_APPROVER_AAD_USER_ID`, `OPERANT_LIVE_TEAMS_TEAM_ID`,
+   `OPERANT_LIVE_TEAMS_CHANNEL_ID`, and `OPERANT_LIVE_TEAMS_DM_CONVERSATION_ID`
+   (plus optional `*_PROMPT` overrides).
+
+2. Print the manual checklist and the required live-env keys, then exit:
+
+   ```bash
+   pnpm teams:live:preflight
+   ```
+
+3. With a stack running and Teams credentials saved, expose the OpenClaw Teams
+   webhook over HTTPS (the Azure Bot Messaging Endpoint pointing at the gateway),
+   then run the manual acceptance:
+
+   ```bash
+   pnpm teams:live:e2e:manual
+   ```
+
+   The manual alias passes `--manual-posts`; plain `pnpm teams:live:e2e` exits
+   because v1 acceptance is manual.
+
+The verifier takes no `--env`/`--live-env` flags, so load the live env into the
+shell environment instead of passing it on the command line.
+
+Per the checklist, the human exercises a Teams DM and an allowlisted channel
+mention, runs OpenClaw `channels status --probe --json`, syncs Operant
+observations to confirm session/job/usage deltas, and exercises an
+approval-required prompt to confirm Operant approval records plus a
+human-observed Teams reply.

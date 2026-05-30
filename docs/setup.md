@@ -45,17 +45,18 @@ when deleting local volumes for a disposable evaluation stack.
 
 ### First sign-in
 
-The login form needs two values:
+The login form starts with a **Platform** selector (Slack or Microsoft Teams).
+It then needs two values:
 
-- **Slack user ID** (`U...`). The human who will be the workspace owner.
-  Look it up in Slack via profile → "Copy member ID", or set it ahead of time
-  with `OPERANT_LIVE_ADMIN_SLACK_USER_ID` in your env.
-- **Admin login token**. The generated `OPERANT_ADMIN_LOGIN_TOKEN` value from
-  your env file. Treat it like a password; rotate it by editing the env and
-  restarting the control plane.
+- **Principal ID** for the chosen platform. For Slack, the **Slack user ID**
+  (`U...`); for Teams, the **Teams AAD user ID** (a GUID). This is the human who
+  becomes the workspace owner. Find the Slack ID via profile, "Copy member ID";
+  find the Teams AAD object ID in Entra.
+- **Admin login token**. The generated `OPERANT_ADMIN_LOGIN_TOKEN` from your env
+  file. Treat it like a password.
 
-The first credential save promotes that Slack user ID to the `owner` role.
-Later sign-ins reuse the same two values.
+The first credential save promotes that principal to the `owner` role. Later
+sign-ins reuse the platform plus principal plus token.
 
 ### Workspace naming
 
@@ -69,7 +70,9 @@ from the Setup tab (or `PUT /api/settings` with
 
 Use the dashboard tabs left to right for a first deployment:
 
-1. **Setup**: sign in with the generated admin login token, save Slack/model
+1. **Setup**: sign in with the generated admin login token. The tab has
+   dedicated Slack and Microsoft Teams sections to save bot/app tokens, Teams
+   app ID/password/tenant ID, and webhook port/path; then save model
    credentials, review masked SecretRef state, and wait for **Ready to run Slack
    acceptance**.
 2. **Health**: confirm workspace settings, config history, and Pipedream
@@ -109,9 +112,11 @@ never stores those tokens. The dashboard surfaces this at connect time, and
 [compliance.md](compliance.md) records the sub-processor boundary, region,
 and the two-actor audit semantics.
 
-The plugin only registers the Pipedream tools when all five vars are present
-in the gateway environment. With any missing, only `operant_ping` registers
-and the gateway boot log prints which vars are absent.
+The plugin only registers the Pipedream tools when all four required vars are
+present in the gateway environment (the OAuth client id and secret, project id,
+and MCP URL). `PIPEDREAM_ENVIRONMENT` is optional and defaults to
+`development`. With any required var missing, only `operant_ping` registers and
+the gateway boot log prints which vars are absent.
 
 To enable Pipedream tools:
 
@@ -122,8 +127,8 @@ To enable Pipedream tools:
 3. Decide between `development` and `production` environments. Pipedream
    Connect treats them as separate token namespaces (a user connected in `dev`
    is not connected in `prod`).
-4. Add the five vars to your live overlay (`.env.acme.live`). They're already
-   in `.env.example`:
+4. Add these vars to your live overlay (`.env.acme.live`), the four required
+   plus the optional `PIPEDREAM_ENVIRONMENT`. They're already in `.env.example`:
 
    ```bash
    OPERANT_MCP_SOURCE_PIPEDREAM_URL=https://remote.mcp.pipedream.net/v3
@@ -135,8 +140,11 @@ To enable Pipedream tools:
 
 5. Restart the gateway: `pnpm compose:up -- --env .env.acme -d` (or `docker
    compose restart openclaw-gateway`).
-6. Verify in the gateway log: `Operant 0.1.0 enabled` should appear in
-   `docker compose exec openclaw-gateway openclaw plugins list`.
+6. Verify the plugin loaded: `docker compose exec openclaw-gateway openclaw
+   plugins list --json` should include a plugin with `"id": "operant"` (name
+   `Operant`). If the Pipedream env vars above are incomplete, the gateway boot
+   log prints `[operant-plugin] Pipedream env (...) incomplete; Pipedream tools
+   will not be registered.` and only `operant_ping` registers.
 
 Pipedream requires an explicit `app` slug for MCP action discovery. Common
 slugs: `gmail`, `slack`, `notion`, `github`, `linear`, `hubspot`,
@@ -279,8 +287,39 @@ with `--msteams-webhook-bind`/`--msteams-webhook-port`).
    placeholder UUIDs with the Azure Bot app ID). Full walkthrough and the v1 RSC
    permission scope live in [deploy/teams/README.md](../deploy/teams/README.md).
 
-Slack remains fully supported; Pipedream Connect per-user tools work the same
-way regardless of which chat platform a user is on.
+Slack remains fully supported. Pipedream Connect per-user tools are currently
+wired to the Slack sender identity (the plugin maps the requester to a Slack
+user id, which Pipedream uses as the external user id); per-user Pipedream OAuth
+is not yet exercised on the Teams channel.
+
+### Teams live check
+
+Teams v1 acceptance is human-driven, not automated. Print the checklist and the
+required live env keys with:
+
+```bash
+pnpm teams:live:preflight
+```
+
+Then run the manual acceptance:
+
+```bash
+pnpm teams:live:e2e:manual   # alias for: pnpm teams:live:e2e -- --manual-posts
+```
+
+Copy `deploy/teams/live.env.example` to a private (gitignored) file and set
+`TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_TENANT_ID`,
+`MSTEAMS_PUBLIC_MESSAGING_ENDPOINT`, and the `OPERANT_LIVE_TEAMS_*` allowed/approver
+AAD user IDs plus the team/channel/DM conversation IDs. The script walks the
+manual checklist: post a Teams DM to Operant and a channel mention in an
+allowlisted team and channel, run OpenClaw `channels status --probe --json`,
+sync Operant observations and confirm session/job/usage deltas, then exercise an
+approval-required prompt and confirm both the Operant approval record and a
+human-observed Teams reply.
+
+Note: `scripts/teams-live-e2e.mjs` accepts only `--manual-posts` and
+`--preflight-only` (no `--env`/`--live-env` flags), so load the live env file
+into the shell environment instead of passing `--env`.
 
 ## OpenClaw Operator Pairing
 

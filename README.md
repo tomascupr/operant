@@ -54,8 +54,11 @@ retention, usage tracking, and the admin dashboard.
 ```
 Slack ──┐
         ├─> OpenClaw gateway ──> Operant policy + audit ──> Postgres
-Teams ──┘                    └─> Pipedream Connect (per-user OAuth)
+Teams ──┘                    └─> Pipedream Connect (per-user OAuth*)
 ```
+
+*Per-user Pipedream OAuth is keyed to the Slack identity today.
+
 
 Slack app tokens, bot tokens, and model API keys live AES-256-GCM
 encrypted in your Postgres. Per-user tool OAuth (Gmail / Notion / GitHub
@@ -91,9 +94,9 @@ workspace or to a specific Slack user.
   ask the agent, in Slack or Teams, for a connect link.
 - Six built-in roles (`owner`, `admin`, `integration_admin`,
   `billing_usage_admin`, `member`, `viewer`) plus arbitrary custom
-  `(action, resource)` permissions. Channel allowlists, per-Slack-user
-  and per-role tool entitlements, named-approver policies for risky
-  actions.
+  `(action, resource)` permissions. Channel allowlists, per-user (Slack
+  member ID or Teams AAD ID) and per-role tool entitlements,
+  named-approver policies for risky actions.
 - Static same-origin admin dashboard: Setup, Health, Integrations,
   Policy, People, Approvals, Activity, Usage, Data, OpenClaw operator
   views. No bundler, no external scripts, strict CSP.
@@ -108,7 +111,7 @@ workspace or to a specific Slack user.
 | --- | --- |
 | Slack + Teams runtime | OpenClaw gateway (Slack Socket Mode, Teams webhook), sessions, tasks |
 | App marketplace | Pipedream catalog search and curated local app cards |
-| Per-user OAuth | Pipedream Connect accounts keyed by each chat user |
+| Per-user OAuth | Pipedream Connect accounts keyed by each Slack user |
 | App/action policy | `pipedream:<app>` tool rules and role/user scopes |
 | Approvals | Named approvers, minimum approvals, dashboard decisions |
 | Audit and usage | Postgres audit log, sessions/jobs, per-user token and cost rows |
@@ -123,8 +126,8 @@ workspace or to a specific Slack user.
 
 - **[Setup guide](docs/setup.md)**. Stack, dashboard sign-in, Slack
   app, Pipedream Connect, integration credentials, sandbox overlay.
-- **[Acceptance guide](docs/acceptance.md)**. Live verifiers, manual
-  human-post mode, strict gates.
+- **[Acceptance guide](docs/acceptance.md)**. Live verifiers for Slack
+  and Microsoft Teams, manual human-post mode, strict gates.
 - **[Slack app setup](deploy/slack/README.md)**. Manifest, scopes,
   Socket Mode, token helpers.
 - **[Microsoft Teams app setup](deploy/teams/README.md)**. Manifest,
@@ -133,6 +136,8 @@ workspace or to a specific Slack user.
   endpoints.
 - **[Contributing](CONTRIBUTING.md)**. Local dev, PR expectations,
   release flow.
+- **[Code of conduct](CODE_OF_CONDUCT.md)**. Contributor Covenant;
+  report issues to work@tomcupr.com.
 - **[Security policy](SECURITY.md)**. Reporting a vulnerability.
 - **[Changelog](CHANGELOG.md)**. Release notes and version history.
 

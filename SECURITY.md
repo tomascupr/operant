@@ -28,8 +28,8 @@ In scope for the OSS core:
 - Credential leakage from Operant Postgres, the control-plane HTTP API,
   the static dashboard, or the generated OpenClaw config.
 - RBAC bypass against the control-plane API.
-- Slack admission policy bypass (denied user reaching the bot, undocumented
-  channel access).
+- Slack or Microsoft Teams admission policy bypass on either platform (a
+  denied user reaching the bot, undocumented channel access).
 - Plaintext storage of any value that should be encrypted at rest.
 - Local privilege escalation paths through the Compose topology.
 
@@ -45,7 +45,7 @@ Out of scope:
 
 ## Data residency and sub-processors
 
-Operant stores Slack/model credentials and custom tool secrets AES-256-GCM
+Operant stores Slack/Teams/model credentials and custom tool secrets AES-256-GCM
 encrypted in your Postgres. When Pipedream Connect is used, the end-user
 OAuth tokens it brokers are held in Pipedream's own infrastructure, outside
 the Operant trust boundary; Operant governs and audits that access but does

@@ -31,6 +31,12 @@ Chrome on macOS, or `CHROME_PATH` set to a Chromium-flavored binary.
 - `pnpm typecheck` and `pnpm test` pass on your branch.
 - New behavior has a `node:test` test under `apps/control-plane/tests/`
   or `apps/openclaw-plugin/tests/`.
+- Heavyweight CLIs under `scripts/` stay self-testable: `pnpm verify:scripts`
+  runs `node --check` plus `--self-test-*` flags for every script (including
+  `node scripts/teams-live-e2e.mjs --self-test-arg-validation`). New
+  chat-platform or policy code should keep dual-identity (Slack + Teams)
+  behavior covered, adding both Slack and Teams cases where policy behavior
+  changes.
 - Migrations are append-only. Add `apps/control-plane/migrations/NNN_*.sql`
   with the next number; do not rewrite an applied migration.
 - The dashboard stays vanilla JS, no external scripts or bundler. The
@@ -66,6 +72,12 @@ gh release create vX.Y.Z --notes-from-tag
 For bugs, open a GitHub issue with reproduction steps and the output of
 `pnpm doctor`. For security issues, see [SECURITY.md](SECURITY.md);
 do not open a public issue.
+
+## Code of conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By
+participating you agree to uphold it. Report unacceptable behavior to
+work@tomcupr.com.
 
 ## License
 

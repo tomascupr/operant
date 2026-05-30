@@ -34,7 +34,7 @@ same process.
 
 | Method | Path                 | Auth        | Purpose                                                                                       |
 | ------ | -------------------- | ----------- | --------------------------------------------------------------------------------------------- |
-| POST   | `/api/bootstrap`     | none        | First-time owner bootstrap. Accepts a one-shot setup payload.                                 |
+| POST   | `/api/bootstrap`     | admin login token | Idempotently ensure the default company/workspace exists. Requires `OPERANT_ADMIN_LOGIN_TOKEN` (sent as the `adminLoginToken` body field or the `x-operant-admin-login-token` header, same as login); returns `{ companyId, workspaceId }`. Returns 503 if the token is not configured, 401 if it is missing or invalid. |
 | POST   | `/api/auth/login`    | none        | Exchange `{slackUserId \| teamsAadUserId, adminLoginToken}` (add `platform` when both ids are sent) for a session bearer token (`operant.sessionToken`). |
 | GET    | `/api/auth/me`       | session     | Current operator: Slack and/or Teams principal, session platform, workspace, roles, permissions. |
 | POST   | `/api/auth/logout`   | session     | Revoke the calling session.                                                                   |
@@ -127,9 +127,10 @@ side.
 | GET    | `/api/jobs`              | session | Background jobs and their status.                        |
 | GET    | `/api/audit`             | session | Token-redacted audit log.                                |
 | GET    | `/api/approvals`         | session | Pending and resolved approval requests.                  |
-| POST   | `/api/approvals`         | session | Decide an approval (`approved` / `denied`).              |
+| POST   | `/api/approvals`         | session | Create an approval request. Body `{action, resource, payload?}`. 201 on success; 409 if no enabled approval policy matches. |
+| POST   | `/api/approvals/<id>/decision` | session | Decide a pending approval. Body `{status: "approved" \| "denied"}`. |
 | GET    | `/api/usage`             | session | Per-event usage rows (tokens, cost).                    |
-| GET    | `/api/usage/summary`     | session | Roll-up of usage and cost by model, tool, day, and Slack user (`byUser`; events with no session bucket as `unattributed`). |
+| GET    | `/api/usage/summary`     | session | Roll-up of usage and cost by model, tool, day, and Slack user (`byUser`; events with no session bucket as `unattributed`). The `byUser` rollup groups on `slack_user_id` only, so Teams-originated sessions currently roll up under `unattributed` rather than per-Teams-user. |
 
 ## Retention
 
@@ -165,13 +166,25 @@ credential pulls are attestable.
 
 ## Conventions
 
-- **Errors** are JSON `{ "error": "<message>", "code": "<snake_case>" }`
-  with appropriate HTTP status. `401 unauthorized` and `403 forbidden`
-  are distinct: `401` means the bearer is missing/invalid, `403` means
-  the role lacks the permission for the route.
-- **Pagination**: list routes accept `?limit=<n>&offset=<n>` and return
-  `{ items: [...], total: <n> }`. The dashboard fetches small pages.
-- **Redaction**: token-shaped strings (xox*, sk-*, AKIA*, JWT-shaped)
+- **Errors** are JSON `{ "error": "<message>" }` with an appropriate
+  HTTP status. zod validation failures return `{ "error": "Invalid
+  request", "issues": [{ code, path, message }] }`. A few responses add
+  context fields alongside `error` (for example the Pipedream-not-configured
+  `503` adds `code: "pipedream_not_configured"` and `required`). `401
+  unauthorized` and `403 forbidden` are distinct: `401` means the bearer
+  is missing or invalid, `403` means the role lacks the permission for
+  the route.
+- **Pagination**: list routes (`/api/audit`, `/api/approvals`,
+  `/api/sessions`, `/api/jobs`, `/api/usage`) return `{ items: [...] }`
+  capped at a fixed server-side limit (200 for audit, 100 for the rest).
+  They do not accept `limit`/`offset` and do not return a `total`. The
+  Pipedream app-catalog route (`/api/integrations/pipedream/apps`)
+  accepts its own `limit` (default 40, max 100) plus an `after` cursor;
+  there is no `offset`.
+- **Redaction**: token-shaped strings (Slack `xox*`/`xapp-`, OpenAI
+  `sk-*`, GitHub `ghp_`/`github_pat_`, AWS `AKIA*`, Pipedream
+  `ctok_`/`tok_`) and Pipedream Connect links, plus the value of any
+  object key matching token/apikey/password/secret/authorization/cookie/credential,
   are scrubbed from audit rows and exports before persistence
   (`apps/control-plane/src/redaction.ts`).
 - **Idempotency**: `POST /api/openclaw/config`, `POST /api/wipe`, and

@@ -13,12 +13,17 @@ disk in plaintext):
 
 - Slack app, bot, and (optional) user tokens.
 - Model provider API keys.
+- Microsoft Teams Azure Bot app password (client secret), when Teams is enabled.
 - Custom non-Pipedream tool credentials, scoped to the workspace or to a
   specific Slack user.
 
 These never leave the control plane except as SecretRefs that OpenClaw
 resolves at runtime over the internal bearer. Residency for this data is
 wherever you host Postgres.
+
+The Teams app (client) id and tenant id are stored as plaintext workspace
+settings (`workspaces.teams_app_id` / `teams_tenant_id`), not as encrypted
+secrets, mirroring how the Slack team id (`workspaces.slack_team_id`) is stored.
 
 ## Sub-processors
 
@@ -38,6 +43,16 @@ If you need every credential inside your own trust boundary, use the native
 per-user SecretRef path (custom tool credentials encrypted in your Postgres)
 instead of, or alongside, the Pipedream marketplace.
 
+## Chat transport
+
+Chat message content transits the chat vendor in both directions and is not
+stored by Operant. Slack messages flow over Slack Socket Mode; Teams messages
+are delivered by Microsoft Azure Bot Service to the OpenClaw gateway webhook
+(`/api/messages`). For Teams deployments, message content in transit plus
+Teams/Microsoft Entra (AAD) identifiers are handled by Microsoft-controlled
+infrastructure in your Azure Bot registration's region; Operant takes no
+custody and stores none of it.
+
 ## Audit attribution (two-actor model)
 
 Audit rows carry two principals so both the operator action and the human on
@@ -51,6 +66,12 @@ whose behalf a tool ran are attestable:
   deny, disconnect, plugin invocation, wipe revocation) and on per-user
   SecretRef resolves, and is indexed for per-user queries. Workspace-level
   events (catalog search, revocation-failed summaries) leave it `null`.
+- The Teams equivalent has no dedicated column today. For Microsoft Teams
+  actions, the AAD principal is recorded only inside the audit row's
+  `metadata` field (`metadata.teamsAadUserId`), not in an indexed `actor_*`
+  column. So Slack per-user attribution is column-indexed
+  (`actor_slack_user_id`) while Teams per-user attribution is currently
+  metadata-only and not indexed.
 
 `metadata.slackUserId` is retained alongside the column for back-compat with
 rows written before the column existed.

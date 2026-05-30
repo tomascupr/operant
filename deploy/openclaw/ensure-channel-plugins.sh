@@ -57,8 +57,41 @@ ensure_plugin() {
   exit 1
 }
 
+# The operant plugin ships with every Operant release, so unlike the version-pinned
+# channel plugins it must be UPGRADED in place when the bundled tarball is newer than
+# the copy already in a reused OpenClaw state volume. has_plugin only checks presence
+# by id, so track the installed version in a writable marker (the generated-config mount
+# is read-only, so the plugin registry stored there cannot be relied on) and
+# force-reinstall whenever the bundled version differs.
+ensure_operant_plugin() {
+  failure_message="Operant plugin is not installed; per-user policy and memory/skills tools will not be available in this gateway."
+  tarball=$(ls /usr/local/share/operant/openclaw/plugins/operant-openclaw-plugin-*.tgz 2>/dev/null | head -1)
+  if [ -z "$tarball" ]; then
+    echo "$failure_message" >&2
+    exit 1
+  fi
+  bundled_version=$(basename "$tarball" | sed -E 's/^operant-openclaw-plugin-(.+)\.tgz$/\1/')
+  marker="$state_dir/.operant-plugin-version"
+  if has_plugin "operant" >/dev/null 2>&1 && [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$bundled_version" ]; then
+    return 0
+  fi
+  log_file="/tmp/openclaw-operant-plugin-install.log"
+  if ! openclaw plugins install --force "$tarball" >"$log_file" 2>&1; then
+    # Files install before the config-write step, which can EROFS on the read-only
+    # generated-config mount; tolerate that and verify the plugin is usable below.
+    :
+  fi
+  if has_plugin "operant" >/dev/null 2>&1; then
+    printf '%s' "$bundled_version" > "$marker" 2>/dev/null || true
+    return 0
+  fi
+  cat "$log_file" >&2
+  echo "$failure_message" >&2
+  exit 1
+}
+
 prune_channel_test_harnesses
 ensure_plugin "slack" "/usr/local/share/operant/openclaw/plugins/openclaw-slack-*.tgz" "OpenClaw Slack plugin is not installed; the gateway cannot serve Slack channels." "slack"
 ensure_plugin "msteams" "/usr/local/share/operant/openclaw/plugins/openclaw-msteams-*.tgz" "OpenClaw Microsoft Teams plugin is not installed; Teams channels will be unavailable (Slack-only stacks can ignore this)." "msteams" "no"
 prune_channel_test_harnesses
-ensure_plugin "operant" "/usr/local/share/operant/openclaw/plugins/operant-openclaw-plugin-*.tgz" "Operant plugin is not installed; per-user policy and Pipedream tools will not be available in this gateway."
+ensure_operant_plugin

@@ -259,6 +259,29 @@ can use to infer the app ID.
 For live verifiers, manual human-post mode, and strict acceptance gates, see
 [docs/acceptance.md](acceptance.md).
 
+## Microsoft Teams App
+
+Operant runs Microsoft Teams alongside Slack on the same control plane. Teams
+reuses OpenClaw's `msteams` channel; Operant does not run a Bot Framework
+handler itself. Instead, Azure Bot Service delivers messages to the OpenClaw
+gateway webhook (container port `3978`, published as `MSTEAMS_WEBHOOK_HOST_PORT`
+and bound to `MSTEAMS_WEBHOOK_HOST_BIND`; `pnpm init:env` scopes both per stack
+with `--msteams-webhook-bind`/`--msteams-webhook-port`).
+
+1. Create or reuse an Azure Bot registration and copy its app/client ID, tenant
+   ID, and client secret into the dashboard Teams setup fields (or a private
+   live env file).
+2. Expose the gateway webhook over HTTPS with your own reverse proxy or tunnel —
+   Operant does not bundle one — and set the Azure Bot **Messaging endpoint** to
+   `https://<your-public-host>/api/messages`.
+3. Build the Teams app package from
+   [deploy/teams/manifest.json](../deploy/teams/manifest.json) (replace both
+   placeholder UUIDs with the Azure Bot app ID). Full walkthrough and the v1 RSC
+   permission scope live in [deploy/teams/README.md](../deploy/teams/README.md).
+
+Slack remains fully supported; Pipedream Connect per-user tools work the same
+way regardless of which chat platform a user is on.
+
 ## OpenClaw Operator Pairing
 
 OpenClaw operator-scoped checks such as secrets reload, exec approvals, and

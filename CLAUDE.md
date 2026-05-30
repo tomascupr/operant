@@ -31,7 +31,7 @@ pnpm workspace, Node 24, pnpm 11. Two apps: `apps/control-plane` (`@operant/cont
 - `apps/openclaw-plugin/tests/*.test.ts` — same `node:test` pattern as control-plane (build, then run compiled JS). `tests/stub-server.ts` is the shared in-process HTTP stub for OAuth + MCP fixtures.
 - `scripts/operant-*.mjs` + `scripts/slack-*.mjs` — heavyweight Node CLIs (doctor, smoke, live E2E, compose E2E, completion audit, final report, handoff, etc.). Each accepts `--self-test-*` flags that exercise their own arg/env parsing; `pnpm verify:scripts` runs them all and they must stay self-testable.
 - `deploy/openclaw/operant-secret-resolver.mjs` — runs inside the OpenClaw gateway container; reads stdin, fetches secrets from the control-plane's `/internal/openclaw/secrets/<id>` using `OPERANT_INTERNAL_TOKEN`, writes JSON to stdout.
-- `deploy/openclaw/Dockerfile.gateway` — multi-stage build: stage 1 (`node:24-alpine`) `pnpm install` + `pnpm --filter @operant/openclaw-plugin build` + `npm pack` into `/build/packed/`; stage 2 (openclaw base) `COPY`s the tarball into `/usr/local/share/operant/openclaw/plugins/` so `ensure-slack-plugin.sh` can `openclaw plugins install --force` it on first boot.
+- `deploy/openclaw/Dockerfile.gateway` — multi-stage build: stage 1 (`node:24-alpine`) `pnpm install` + `pnpm --filter @operant/openclaw-plugin build` + `npm pack` into `/build/packed/`; stage 2 (openclaw base) `COPY`s the tarball into `/usr/local/share/operant/openclaw/plugins/` so `ensure-channel-plugins.sh` can `openclaw plugins install --force` it on first boot.
 
 ## Commands
 

@@ -31,8 +31,11 @@ plus your Slack member ID (Slack profile → "Copy member ID"). The
 **Setup** tab then walks you through Slack/model credentials — create
 the Slack app from
 [deploy/slack/manifest.yaml](deploy/slack/manifest.yaml) first
-(see [deploy/slack/README.md](deploy/slack/README.md)). Full
-walkthrough in **[docs/setup.md](docs/setup.md)**.
+(see [deploy/slack/README.md](deploy/slack/README.md)). Microsoft Teams
+runs alongside Slack on the same control plane — see
+[deploy/teams/README.md](deploy/teams/README.md) to wire an Azure Bot to
+the OpenClaw Teams channel. Full walkthrough in
+**[docs/setup.md](docs/setup.md)**.
 
 Requirements: Node 24+, pnpm 11+, Docker Compose v2.
 
@@ -122,6 +125,8 @@ workspace or to a specific Slack user.
   human-post mode, strict gates.
 - **[Slack app setup](deploy/slack/README.md)**. Manifest, scopes,
   Socket Mode, token helpers.
+- **[Microsoft Teams app setup](deploy/teams/README.md)**. Manifest,
+  Azure Bot messaging endpoint, RSC permissions.
 - **[HTTP API reference](docs/api.md)**. Dashboard and internal
   endpoints.
 - **[Contributing](CONTRIBUTING.md)**. Local dev, PR expectations,

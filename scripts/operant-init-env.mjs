@@ -17,6 +17,8 @@ const valueOptions = new Set([
   "--postgres-port",
   "--gateway-bind",
   "--gateway-port",
+  "--msteams-webhook-bind",
+  "--msteams-webhook-port",
 ]);
 const flagOptions = new Set(["--", "--help", "-h", "--force", "--self-test-permissions", "--self-test-arg-validation"]);
 
@@ -45,6 +47,8 @@ Options:
   --postgres-port <port>   Postgres host port; default 5432
   --gateway-bind <host>    OpenClaw gateway host bind; default 127.0.0.1
   --gateway-port <port>    OpenClaw gateway host port; default 18789
+  --msteams-webhook-bind <host>  Microsoft Teams webhook host bind; default 127.0.0.1
+  --msteams-webhook-port <port>  Microsoft Teams webhook host port; default 3978
   --force                  Overwrite an existing output file
   --help, -h               Show this help
 `);
@@ -96,6 +100,10 @@ function runArgValidationSelfTest() {
     "127.0.0.1",
     "--gateway-port",
     "28789",
+    "--msteams-webhook-bind",
+    "127.0.0.1",
+    "--msteams-webhook-port",
+    "13978",
     "--force",
   ]);
   assertValidationFails(["--unknown"], "Unknown option");
@@ -131,6 +139,8 @@ const postgresBind = argValue("--postgres-bind", process.env.POSTGRES_HOST_BIND 
 const postgresPort = argValue("--postgres-port", process.env.POSTGRES_HOST_PORT || "5432");
 const gatewayBind = argValue("--gateway-bind", process.env.OPENCLAW_GATEWAY_HOST_BIND || "127.0.0.1");
 const gatewayPort = argValue("--gateway-port", process.env.OPENCLAW_GATEWAY_HOST_PORT || "18789");
+const msteamsWebhookBind = argValue("--msteams-webhook-bind", process.env.MSTEAMS_WEBHOOK_HOST_BIND || "127.0.0.1");
+const msteamsWebhookPort = argValue("--msteams-webhook-port", process.env.MSTEAMS_WEBHOOK_HOST_PORT || "3978");
 const force = hasFlag("--force");
 const selfTestPermissions = hasFlag("--self-test-permissions");
 
@@ -237,10 +247,13 @@ validateBindAddress("POSTGRES_HOST_BIND", postgresBind);
 validatePort("POSTGRES_HOST_PORT", postgresPort);
 validateBindAddress("OPENCLAW_GATEWAY_HOST_BIND", gatewayBind);
 validatePort("OPENCLAW_GATEWAY_HOST_PORT", gatewayPort);
+validateBindAddress("MSTEAMS_WEBHOOK_HOST_BIND", msteamsWebhookBind);
+validatePort("MSTEAMS_WEBHOOK_HOST_PORT", msteamsWebhookPort);
 validateDistinctPorts([
   ["OPERANT_HTTP_PORT", httpPort],
   ["POSTGRES_HOST_PORT", postgresPort],
   ["OPENCLAW_GATEWAY_HOST_PORT", gatewayPort],
+  ["MSTEAMS_WEBHOOK_HOST_PORT", msteamsWebhookPort],
 ]);
 output = replaceEnvValue(output, "OPERANT_COMPOSE_PROJECT_NAME", projectName);
 output = replaceEnvValue(output, "OPERANT_HTTP_BIND", httpBind);
@@ -249,6 +262,8 @@ output = replaceEnvValue(output, "POSTGRES_HOST_BIND", postgresBind);
 output = replaceEnvValue(output, "POSTGRES_HOST_PORT", postgresPort);
 output = replaceEnvValue(output, "OPENCLAW_GATEWAY_HOST_BIND", gatewayBind);
 output = replaceEnvValue(output, "OPENCLAW_GATEWAY_HOST_PORT", gatewayPort);
+output = replaceEnvValue(output, "MSTEAMS_WEBHOOK_HOST_BIND", msteamsWebhookBind);
+output = replaceEnvValue(output, "MSTEAMS_WEBHOOK_HOST_PORT", msteamsWebhookPort);
 output = replaceEnvValue(output, "POSTGRES_PASSWORD", postgresPassword);
 output = replaceEnvValue(output, "DATABASE_URL", `postgres://operant:${postgresPassword}@postgres:5432/operant`);
 output = replaceEnvValue(output, "OPERANT_SECRET_KEY", randomBase64(32));

@@ -16,9 +16,10 @@ ARG OPENCLAW_VERSION=2026.5.18
 USER root
 RUN mkdir -p /usr/local/share/operant/openclaw/plugins \
   && chown -R node:node /usr/local/share/operant/openclaw
-COPY deploy/openclaw/ensure-slack-plugin.sh /usr/local/bin/operant-ensure-slack-plugin
-RUN chmod 0755 /usr/local/bin/operant-ensure-slack-plugin
+COPY deploy/openclaw/ensure-channel-plugins.sh /usr/local/bin/operant-ensure-channel-plugins
+RUN chmod 0755 /usr/local/bin/operant-ensure-channel-plugins
 COPY --from=plugin-build --chown=node:node /build/packed/*.tgz /usr/local/share/operant/openclaw/plugins/
 
 USER node
-RUN npm pack --pack-destination /usr/local/share/operant/openclaw/plugins @openclaw/slack@${OPENCLAW_VERSION}
+RUN npm pack --pack-destination /usr/local/share/operant/openclaw/plugins @openclaw/slack@${OPENCLAW_VERSION} \
+  && npm pack --pack-destination /usr/local/share/operant/openclaw/plugins @openclaw/msteams@${OPENCLAW_VERSION}

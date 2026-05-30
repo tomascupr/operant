@@ -29,7 +29,7 @@ services:
       - |
         mkdir -p /home/node/.openclaw/agents/main/sessions
         chmod 700 /home/node/.openclaw
-        operant-ensure-slack-plugin
+        operant-ensure-channel-plugins
         if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
           docker build -t openclaw-sandbox:bookworm-slim -f /usr/local/share/operant/openclaw/Dockerfile.sandbox-runtime /usr/local/share/operant/openclaw
         fi

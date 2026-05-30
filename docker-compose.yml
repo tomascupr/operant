@@ -99,13 +99,14 @@ services:
       - ./deploy/openclaw/operant-secret-resolver.mjs:/operant/openclaw/operant-secret-resolver.mjs:ro
     ports:
       - "${OPENCLAW_GATEWAY_HOST_BIND:-127.0.0.1}:${OPENCLAW_GATEWAY_HOST_PORT:-18789}:18789"
+      - "${MSTEAMS_WEBHOOK_HOST_BIND:-127.0.0.1}:${MSTEAMS_WEBHOOK_HOST_PORT:-3978}:3978"
     command:
       - sh
       - -lc
       - |
         mkdir -p /home/node/.openclaw/agents/main/sessions
         chmod 700 /home/node/.openclaw
-        operant-ensure-slack-plugin
+        operant-ensure-channel-plugins
         exec openclaw gateway run --allow-unconfigured --port 18789 --bind lan --auth token
 
 volumes:

@@ -50,10 +50,11 @@ const requiredChecks = [
   ["resolver script mounted read-only", /\.\/deploy\/openclaw\/operant-secret-resolver\.mjs:\/operant\/openclaw\/operant-secret-resolver\.mjs:ro/],
   ["OpenClaw session store bootstrap", /mkdir -p \/home\/node\/\.openclaw\/agents\/main\/sessions/],
   ["OpenClaw state dir private permissions", /chmod 700 \/home\/node\/\.openclaw/],
-  ["OpenClaw Slack plugin bootstrap", /operant-ensure-slack-plugin/],
+  ["OpenClaw channel plugin bootstrap", /operant-ensure-channel-plugins/],
   ["OpenClaw gateway command", /exec openclaw gateway run --allow-unconfigured --port 18789 --bind lan --auth token/],
   ["Postgres localhost host bind and port", /-\s*"\$\{POSTGRES_HOST_BIND:-127\.0\.0\.1\}:\$\{POSTGRES_HOST_PORT:-5432\}:5432"/],
   ["OpenClaw gateway localhost host bind and port", /-\s*"\$\{OPENCLAW_GATEWAY_HOST_BIND:-127\.0\.0\.1\}:\$\{OPENCLAW_GATEWAY_HOST_PORT:-18789\}:18789"/],
+  ["Teams webhook localhost host bind and port", /-\s*"\$\{MSTEAMS_WEBHOOK_HOST_BIND:-127\.0\.0\.1\}:\$\{MSTEAMS_WEBHOOK_HOST_PORT:-3978\}:3978"/],
   ["volume operant-postgres", /^  operant-postgres:\n/m],
   ["volume operant-redis", /^  operant-redis:\n/m],
   ["volume operant-openclaw-state", /^  operant-openclaw-state:\n/m],
@@ -80,9 +81,10 @@ const dockerfileRejectChecks = [
 const gatewayDockerfileChecks = [
   ["gateway image extends pinned OpenClaw image", /FROM ghcr\.io\/openclaw\/openclaw:\$\{OPENCLAW_VERSION\}/],
   ["gateway image redeclares OpenClaw version arg", /ARG OPENCLAW_VERSION=2026\.5\.\d+/],
-  ["gateway image prepares Slack plugin package dir", /mkdir -p \/usr\/local\/share\/operant\/openclaw\/plugins/],
-  ["gateway image copies Slack plugin bootstrap", /COPY deploy\/openclaw\/ensure-slack-plugin\.sh \/usr\/local\/bin\/operant-ensure-slack-plugin/],
+  ["gateway image prepares channel plugin package dir", /mkdir -p \/usr\/local\/share\/operant\/openclaw\/plugins/],
+  ["gateway image copies channel plugin bootstrap", /COPY deploy\/openclaw\/ensure-channel-plugins\.sh \/usr\/local\/bin\/operant-ensure-channel-plugins/],
   ["gateway image packs OpenClaw Slack plugin", /npm pack --pack-destination \/usr\/local\/share\/operant\/openclaw\/plugins @openclaw\/slack@\$\{OPENCLAW_VERSION\}/],
+  ["gateway image packs OpenClaw Teams plugin", /npm pack --pack-destination \/usr\/local\/share\/operant\/openclaw\/plugins @openclaw\/msteams@\$\{OPENCLAW_VERSION\}/],
   ["gateway image returns to node user", /^USER node$/m],
 ];
 
@@ -106,7 +108,7 @@ const sandboxOverlayChecks = [
   ["OpenClaw runtime sandbox image inspect", /docker image inspect openclaw-sandbox:bookworm-slim/],
   ["OpenClaw runtime sandbox image build", /docker build -t openclaw-sandbox:bookworm-slim -f \/usr\/local\/share\/operant\/openclaw\/Dockerfile\.sandbox-runtime \/usr\/local\/share\/operant\/openclaw/],
   ["sandbox overlay state dir private permissions", /chmod 700 \/home\/node\/\.openclaw/],
-  ["sandbox overlay Slack plugin bootstrap", /operant-ensure-slack-plugin/],
+  ["sandbox overlay channel plugin bootstrap", /operant-ensure-channel-plugins/],
 ];
 
 const sandboxDockerfileChecks = [
@@ -116,8 +118,9 @@ const sandboxDockerfileChecks = [
   ["sandbox image downloads static Docker CLI", /download\.docker\.com\/linux\/static\/stable\/\$\{docker_arch\}\/docker-\$\{DOCKER_CLI_VERSION\}\.tgz/],
   ["sandbox image installs Docker CLI binary", /install -m 0755 \/tmp\/docker\/docker \/usr\/local\/bin\/docker/],
   ["sandbox image includes runtime Dockerfile", /COPY deploy\/openclaw\/Dockerfile\.sandbox-runtime \/usr\/local\/share\/operant\/openclaw\/Dockerfile\.sandbox-runtime/],
-  ["sandbox image copies Slack plugin bootstrap", /COPY deploy\/openclaw\/ensure-slack-plugin\.sh \/usr\/local\/bin\/operant-ensure-slack-plugin/],
+  ["sandbox image copies channel plugin bootstrap", /COPY deploy\/openclaw\/ensure-channel-plugins\.sh \/usr\/local\/bin\/operant-ensure-channel-plugins/],
   ["sandbox image packs OpenClaw Slack plugin", /npm pack --pack-destination \/usr\/local\/share\/operant\/openclaw\/plugins @openclaw\/slack@\$\{OPENCLAW_VERSION\}/],
+  ["sandbox image packs OpenClaw Teams plugin", /npm pack --pack-destination \/usr\/local\/share\/operant\/openclaw\/plugins @openclaw\/msteams@\$\{OPENCLAW_VERSION\}/],
   ["sandbox image removes apt lists", /rm -rf[\s\S]*\/var\/lib\/apt\/lists\/\*/],
   ["sandbox image returns to node user", /^USER node$/m],
 ];

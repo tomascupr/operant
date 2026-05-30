@@ -79,6 +79,40 @@ const checks = [
     ],
   },
   {
+    file: "deploy/teams/manifest.json",
+    patterns: [
+      ["Teams bot scopes", /"scopes":\s*\[\s*"personal",\s*"team",\s*"groupchat"\s*\]/],
+      ["Teams supports files flag", /"supportsFiles":\s*true/],
+      ["Teams channel read RSC", /"ChannelMessage\.Read\.Group"/],
+      ["Teams channel send RSC", /"ChannelMessage\.Send\.Group"/],
+      ["Teams member read RSC", /"Member\.Read\.Group"/],
+      ["Teams owner read RSC", /"Owner\.Read\.Group"/],
+      ["Teams channel settings RSC", /"ChannelSettings\.Read\.Group"/],
+      ["Teams team settings RSC", /"TeamSettings\.Read\.Group"/],
+      ["Teams chat message RSC", /"ChatMessage\.Read\.Chat"/],
+    ],
+  },
+  {
+    file: "deploy/teams/README.md",
+    patterns: [
+      ["Teams OpenClaw reuse note", /OpenClaw's `msteams` channel/],
+      ["Teams Azure endpoint", /Messaging endpoint[\s\S]*\/api\/messages/],
+      ["Teams tunnel operator note", /Operant does not bundle a tunnel provider/],
+      ["Teams live env template", /live\.env\.example/],
+    ],
+  },
+  {
+    file: "deploy/teams/live.env.example",
+    patterns: [
+      ["Teams app id", /TEAMS_APP_ID=00000000-0000-0000-0000-000000000000/],
+      ["Teams app password", /TEAMS_APP_PASSWORD=<teams-bot-client-secret>/],
+      ["Teams tenant id", /TEAMS_TENANT_ID=00000000-0000-0000-0000-000000000000/],
+      ["Teams public endpoint", /MSTEAMS_PUBLIC_MESSAGING_ENDPOINT=https:\/\/.+\/api\/messages/],
+      ["Teams allowed user", /OPERANT_LIVE_TEAMS_ALLOWED_AAD_USER_ID=/],
+      ["Teams approval prompt", /OPERANT_LIVE_TEAMS_APPROVAL_PROMPT=/],
+    ],
+  },
+  {
     file: "deploy/helm/operant/Chart.yaml",
     patterns: [
       ["Helm chart apiVersion", /apiVersion:\s*v2/],
@@ -359,6 +393,31 @@ async function verifySlackScopeContract() {
   }
 }
 
+async function verifyTeamsIcons() {
+  for (const [file, width, height] of [
+    ["deploy/teams/color.png", 192, 192],
+    ["deploy/teams/outline.png", 32, 32],
+  ]) {
+    let png;
+    try {
+      png = await readFile(path.join(repoRoot, file));
+    } catch (error) {
+      failures.push(`${file}: missing (${error.message})`);
+      continue;
+    }
+    const signature = png.subarray(0, 8).toString("hex");
+    if (signature !== "89504e470d0a1a0a") {
+      failures.push(`${file}: not a PNG`);
+      continue;
+    }
+    const actualWidth = png.readUInt32BE(16);
+    const actualHeight = png.readUInt32BE(20);
+    if (actualWidth !== width || actualHeight !== height) {
+      failures.push(`${file}: expected ${width}x${height}, got ${actualWidth}x${actualHeight}`);
+    }
+  }
+}
+
 for (const check of checks) {
   const target = path.join(repoRoot, check.file);
   let source = "";
@@ -376,6 +435,7 @@ for (const check of checks) {
 const helmValuesSchema = await verifyHelmValuesSchema();
 await verifyHelmDefaultValues(helmValuesSchema);
 await verifySlackScopeContract();
+await verifyTeamsIcons();
 
 const canonicalResolver = await readFile(path.join(repoRoot, "deploy/openclaw/operant-secret-resolver.mjs"), "utf8");
 const chartResolver = await readFile(path.join(repoRoot, "deploy/helm/operant/files/operant-secret-resolver.mjs"), "utf8");

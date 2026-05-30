@@ -3,6 +3,42 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.0] - 2026-05-30
+
+### Added
+- Add login rate limiting to blunt admin-token brute-force (62bb715)
+- Add per-user cost attribution and daily trend to the FinOps dashboard (a5d85e9)
+- Add Teams dual-identity schema (migrations 009-011) + widen channel-policy upsert (a405fe8)
+- Add Teams identifier schemas and optional dual-identity record fields (df38b17)
+- Add Microsoft Teams as a dual-identity chat platform (control plane) (ff0559b)
+- Add Teams to the dashboard (login, setup, policy, people) (7da7912)
+
+
+### Chore
+- add GitHub community health files (46a828a)
+
+
+### Documentation
+- Document the Pipedream sub-processor boundary and audit semantics (0e36957)
+- Document Teams in the API reference and project guidance (3e2decc)
+- align the README, docs, and project guidance with the Teams release (e0a5556)
+
+
+### Fixed
+- Fix Pipedream connect-token mint to project-scoped path (54f17b8)
+- Fix dashboard E2E Pipedream stub to project-scoped connect-token path (bd5f3f5)
+- close redaction gaps, bound the plugin's control-plane fetch, and harden Teams user upsert (2c0ec52)
+
+
+### Other
+- Update agent guidance (293e34e)
+- Close verified Pipedream governance gaps (connect authz + wipe revocation) (5caf6b6)
+- Record the Slack chat principal on Pipedream audit rows (72b1bac)
+- Disclose Pipedream as a sub-processor at connect time (08a082c)
+- Make the policy engine dual-identity (Slack + Teams) (b7013d6)
+- Wire Teams into deploy, scripts, env, and docs (b94f8b5)
+- Make Teams first-class in the README marketing; drop em-dashes (a86aef6)
+
 ## [0.2.0] - 2026-05-22
 
 ### Added
@@ -22,6 +58,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com).
 - Smooth the first-time install path (edc62d5)
 - Reposition as 'self-hosted agents in Slack' (fc70e9a)
 - Close quickstart gap after compose:up (a1c9b8e)
+- Release v0.2.0 (14685cd)
 
 ## [0.1.0] - 2026-05-19
 

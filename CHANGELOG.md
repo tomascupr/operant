@@ -3,6 +3,15 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.1] - 2026-05-30
+
+### Documentation
+- reflect dual-identity Pipedream policy and Teams audit attribution (9537456)
+
+
+### Fixed
+- enforce per-user Pipedream policy by principal and attribute Teams actors correctly (4661dfc)
+
 ## [0.3.0] - 2026-05-30
 
 ### Added

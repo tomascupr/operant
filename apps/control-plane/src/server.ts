@@ -26,6 +26,7 @@ import { redactRecordForPersistence } from "./redaction.js";
 import { applyRetentionPurge, applyRetentionWipe, buildRetentionExport, retentionWipeScopes } from "./retention.js";
 import { decryptSecret, encryptSecret, parseMasterKey } from "./secrets.js";
 import {
+  chatPlatforms,
   credentialInputSchema,
   customRoleUpsertSchema,
   integrationCredentialInputSchema,
@@ -37,12 +38,14 @@ import {
   policyEvaluationSchema,
   roleNames,
   slackIdSchema,
+  teamsAadUserIdSchema,
   usageCostUsdSchema,
   usageTokenCountSchema,
   workspaceSettingsUpdateSchema,
   userUpsertSchema,
   type ApprovalPolicyRecord,
   type ChannelPolicyRecord,
+  type ChatPlatform,
   type ToolPolicyRecord,
 } from "./schema.js";
 import { ensureDefaultWorkspace } from "./seed.js";
@@ -53,6 +56,7 @@ const builtinRoleNames = new Set<string>(roleNames);
 const openClawEventTypeSchema = z.string().min(1).max(80).regex(/^[a-z][a-z0-9_.:-]*$/);
 const openClawEventIdSchema = z.string().min(1).max(512);
 const openClawSlackIdSchema = z.string().min(1).max(120);
+const openClawChatIdSchema = z.string().min(1).max(256);
 const openClawUsageLabelSchema = z.string().min(1).max(160);
 const maxJsonBodyBytes = 1024 * 1024;
 const pipedreamOAuthTokenUrl = "https://api.pipedream.com/v1/oauth/token";
@@ -298,7 +302,9 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 async function getWorkspace(pool: Database) {
   const seeded = await ensureDefaultWorkspace(pool);
   const workspace = await pool.query(
-    `SELECT w.id, w.company_id, w.name, w.slack_team_id, w.openclaw_gateway_url, w.openclaw_config_path, w.created_at, c.name AS company_name
+    `SELECT w.id, w.company_id, w.name, w.slack_team_id, w.teams_app_id, w.teams_tenant_id,
+            w.msteams_webhook_port, w.msteams_webhook_path,
+            w.openclaw_gateway_url, w.openclaw_config_path, w.created_at, c.name AS company_name
      FROM workspaces w
      JOIN companies c ON c.id = w.company_id
      WHERE w.id = $1`,
@@ -335,12 +341,35 @@ async function audit(pool: Queryable, input: {
   );
 }
 
-function actorSlackUserId(req: IncomingMessage): string | null {
+type ChatPrincipal = {
+  platform: ChatPlatform;
+  principalId: string;
+};
+
+function actorChatPrincipal(req: IncomingMessage): ChatPrincipal | null {
   if (process.env.OPERANT_ALLOW_HEADER_AUTH !== "true") return null;
-  const header = req.headers["x-operant-slack-user-id"] ?? req.headers["x-operant-user-id"];
-  const value = Array.isArray(header) ? header[0] : header;
-  const parsed = slackIdSchema.safeParse(value?.trim() || "");
-  return parsed.success ? parsed.data : null;
+  const platformHeader = req.headers["x-operant-chat-platform"];
+  const platformValue = Array.isArray(platformHeader) ? platformHeader[0] : platformHeader;
+  const trimmedPlatform = platformValue?.trim().toLowerCase() ?? "slack";
+  const platformParse = z.enum(chatPlatforms).safeParse(trimmedPlatform);
+  const platform: ChatPlatform = platformParse.success ? platformParse.data : "slack";
+  const principalHeader = req.headers["x-operant-principal-id"]
+    ?? (platform === "slack" ? req.headers["x-operant-slack-user-id"] ?? req.headers["x-operant-user-id"] : req.headers["x-operant-teams-aad-user-id"]);
+  const value = Array.isArray(principalHeader) ? principalHeader[0] : principalHeader;
+  const trimmed = value?.trim() || "";
+  if (platform === "slack") {
+    const parsed = slackIdSchema.safeParse(trimmed);
+    return parsed.success ? { platform, principalId: parsed.data } : null;
+  }
+  const teamsParse = teamsAadUserIdSchema.safeParse(trimmed);
+  return teamsParse.success ? { platform, principalId: teamsParse.data } : null;
+}
+
+function actorChatPrincipals(slackUserId: string | null, teamsAadUserId: string | null): ChatPrincipal[] {
+  const principals: ChatPrincipal[] = [];
+  if (slackUserId) principals.push({ platform: "slack", principalId: slackUserId });
+  if (teamsAadUserId) principals.push({ platform: "msteams", principalId: teamsAadUserId });
+  return principals;
 }
 
 function sessionTokenFromRequest(req: IncomingMessage): string | null {
@@ -401,16 +430,22 @@ function decodePathComponent(value: string): string | null {
   }
 }
 
-async function resolveSessionActor(pool: Queryable, req: IncomingMessage, workspaceId: string): Promise<{
+type SessionActor = {
   userId: string;
   slackUserId: string | null;
+  teamsAadUserId: string | null;
+  chatPlatform: ChatPlatform | null;
+  principalId: string | null;
+  chatPrincipals: ChatPrincipal[];
   roles: string[];
-} | null> {
+};
+
+async function resolveSessionActor(pool: Queryable, req: IncomingMessage, workspaceId: string): Promise<SessionActor | null> {
   const token = sessionTokenFromRequest(req);
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
   const result = await pool.query(
-    `SELECT u.id AS user_id, u.slack_user_id, array_agg(DISTINCT r.name) AS roles
+    `SELECT u.id AS user_id, u.slack_user_id, u.teams_aad_user_id, s.principal_platform, array_agg(DISTINCT r.name) AS roles
      FROM admin_sessions s
      JOIN users u ON u.id = s.user_id
      JOIN role_assignments ra ON ra.user_id = u.id
@@ -420,15 +455,25 @@ async function resolveSessionActor(pool: Queryable, req: IncomingMessage, worksp
        AND s.revoked_at IS NULL
        AND s.expires_at > now()
        AND (ra.workspace_id = $2 OR ra.workspace_id IS NULL)
-     GROUP BY u.id, u.slack_user_id`,
+     GROUP BY u.id, u.slack_user_id, u.teams_aad_user_id, s.principal_platform`,
     [tokenHash, workspaceId],
   );
   if (!result.rowCount) return null;
   await pool.query("UPDATE admin_sessions SET last_seen_at = now() WHERE token_hash = $1", [tokenHash]);
+  const row = result.rows[0];
+  const principals = actorChatPrincipals(row.slack_user_id, row.teams_aad_user_id);
+  const sessionPlatform: ChatPlatform | null = row.principal_platform === "msteams" || row.principal_platform === "slack"
+    ? row.principal_platform
+    : principals[0]?.platform ?? null;
+  const primaryPrincipal = principals.find((p) => p.platform === sessionPlatform) ?? principals[0] ?? null;
   return {
-    userId: result.rows[0].user_id,
-    slackUserId: result.rows[0].slack_user_id,
-    roles: result.rows[0].roles ?? [],
+    userId: row.user_id,
+    slackUserId: row.slack_user_id,
+    teamsAadUserId: row.teams_aad_user_id,
+    chatPlatform: primaryPrincipal?.platform ?? null,
+    principalId: primaryPrincipal?.principalId ?? null,
+    chatPrincipals: principals,
+    roles: row.roles ?? [],
   };
 }
 
@@ -464,14 +509,52 @@ async function loadSlackUserRoleNames(pool: Queryable, companyId: string, worksp
   return result.rows.map((row) => row.name);
 }
 
+async function loadChatPrincipalRoleNames(pool: Queryable, companyId: string, workspaceId: string, platform: ChatPlatform, principalId: string): Promise<string[]> {
+  if (platform === "slack") return loadSlackUserRoleNames(pool, companyId, workspaceId, principalId);
+  const result = await pool.query(
+    `SELECT DISTINCT r.name
+     FROM users u
+     JOIN role_assignments ra ON ra.user_id = u.id
+     JOIN roles r ON r.id = ra.role_id
+     WHERE u.company_id = $1
+       AND u.teams_aad_user_id = $2
+       AND (ra.workspace_id = $3 OR ra.workspace_id IS NULL)
+     ORDER BY r.name`,
+    [companyId, principalId, workspaceId],
+  );
+  return result.rows.map((row) => row.name);
+}
+
+type Authorized = {
+  ok: true;
+  actorUserId: string | null;
+  actorSlackUserId: string | null;
+  actorTeamsAadUserId: string | null;
+  actorChatPlatform: ChatPlatform | null;
+  actorPrincipalId: string | null;
+  actorChatPrincipals: ChatPrincipal[];
+  roles: string[];
+};
+
 async function requirePermissionForWorkspace(
   context: RouteContext,
   workspace: any,
   requested: { action: string; resource: string },
   options: { allowIfNoAssignments?: boolean } = {},
-): Promise<{ ok: true; actorUserId: string | null; actorSlackUserId: string | null; roles: string[] } | { ok: false }> {
+): Promise<Authorized | { ok: false }> {
   const assignmentsExist = await hasRoleAssignments(context.state.pool, workspace.id);
-  if (!assignmentsExist && options.allowIfNoAssignments) return { ok: true, actorUserId: null, actorSlackUserId: null, roles: [] };
+  if (!assignmentsExist && options.allowIfNoAssignments) {
+    return {
+      ok: true,
+      actorUserId: null,
+      actorSlackUserId: null,
+      actorTeamsAadUserId: null,
+      actorChatPlatform: null,
+      actorPrincipalId: null,
+      actorChatPrincipals: [],
+      roles: [],
+    };
+  }
 
   const sessionActor = await resolveSessionActor(context.state.pool, context.req, workspace.id);
   if (sessionActor) {
@@ -483,32 +566,48 @@ async function requirePermissionForWorkspace(
         eventType: "rbac.denied",
         resourceType: requested.resource,
         outcome: "deny",
-        metadata: { action: requested.action, slackUserId: sessionActor.slackUserId, roles: sessionActor.roles },
+        metadata: { action: requested.action, slackUserId: sessionActor.slackUserId, teamsAadUserId: sessionActor.teamsAadUserId, roles: sessionActor.roles },
       });
       sendJson(context.res, 403, { error: "RBAC denied", requested, roles: sessionActor.roles });
       return { ok: false };
     }
-    return { ok: true, actorUserId: sessionActor.userId, actorSlackUserId: sessionActor.slackUserId, roles: sessionActor.roles };
+    return {
+      ok: true,
+      actorUserId: sessionActor.userId,
+      actorSlackUserId: sessionActor.slackUserId,
+      actorTeamsAadUserId: sessionActor.teamsAadUserId,
+      actorChatPlatform: sessionActor.chatPlatform,
+      actorPrincipalId: sessionActor.principalId,
+      actorChatPrincipals: sessionActor.chatPrincipals,
+      roles: sessionActor.roles,
+    };
   }
 
-  const slackUserId = actorSlackUserId(context.req);
-  if (!slackUserId) {
+  const chatPrincipal = actorChatPrincipal(context.req);
+  if (!chatPrincipal) {
     sendJson(context.res, 401, { error: "Missing or invalid Operant admin session" });
     return { ok: false };
   }
+  const slackUserId = chatPrincipal.platform === "slack" ? chatPrincipal.principalId : null;
+  const teamsAadUserId = chatPrincipal.platform === "msteams" ? chatPrincipal.principalId : null;
 
   const result = await context.state.pool.query(
-    `SELECT u.id AS user_id, r.name AS role_name
+    `SELECT u.id AS user_id, u.slack_user_id, u.teams_aad_user_id, r.name AS role_name
      FROM users u
      JOIN role_assignments ra ON ra.user_id = u.id
      JOIN roles r ON r.id = ra.role_id
      WHERE u.company_id = $1
-       AND u.slack_user_id = $2
-       AND (ra.workspace_id = $3 OR ra.workspace_id IS NULL)`,
-    [workspace.company_id, slackUserId, workspace.id],
+       AND (
+         ($2 = 'slack' AND u.slack_user_id = $3)
+         OR ($2 = 'msteams' AND u.teams_aad_user_id = $3)
+       )
+       AND (ra.workspace_id = $4 OR ra.workspace_id IS NULL)`,
+    [workspace.company_id, chatPrincipal.platform, chatPrincipal.principalId, workspace.id],
   );
   const roles = result.rows.map((row) => row.role_name);
   const actorUserId = result.rows[0]?.user_id;
+  const resolvedSlackUserId = result.rows[0]?.slack_user_id ?? slackUserId;
+  const resolvedTeamsAadUserId = result.rows[0]?.teams_aad_user_id ?? teamsAadUserId;
   if (!actorUserId || !(await userHasPermission(context.state.pool, actorUserId, workspace.id, requested))) {
     await audit(context.state.pool, {
       companyId: workspace.company_id,
@@ -517,12 +616,21 @@ async function requirePermissionForWorkspace(
       eventType: "rbac.denied",
       resourceType: requested.resource,
       outcome: "deny",
-      metadata: { action: requested.action, slackUserId, roles },
+      metadata: { action: requested.action, chatPlatform: chatPrincipal.platform, principalId: chatPrincipal.principalId, slackUserId, teamsAadUserId, roles },
     });
     sendJson(context.res, 403, { error: "RBAC denied", requested, roles });
     return { ok: false };
   }
-  return { ok: true, actorUserId, actorSlackUserId: slackUserId, roles };
+  return {
+    ok: true,
+    actorUserId,
+    actorSlackUserId: resolvedSlackUserId,
+    actorTeamsAadUserId: resolvedTeamsAadUserId,
+    actorChatPlatform: chatPrincipal.platform,
+    actorPrincipalId: chatPrincipal.principalId,
+    actorChatPrincipals: actorChatPrincipals(resolvedSlackUserId, resolvedTeamsAadUserId),
+    roles,
+  };
 }
 
 async function upsertCredential(pool: Queryable, masterKey: Buffer, workspaceId: string, kind: string, label: string, secretRefId: string, plaintext: string, slackUserId: string | null = null): Promise<void> {
@@ -537,7 +645,7 @@ async function upsertCredential(pool: Queryable, masterKey: Buffer, workspaceId:
 
 async function loadToolPolicies(pool: Queryable, workspaceId: string): Promise<ToolPolicyRecord[]> {
   const result = await pool.query(
-    `SELECT tool, action, effect, slack_user_ids, role_names
+    `SELECT tool, action, effect, slack_user_ids, teams_aad_user_ids, role_names
      FROM tool_policies
      WHERE workspace_id = $1
      ORDER BY tool, action, effect, created_at`,
@@ -548,6 +656,7 @@ async function loadToolPolicies(pool: Queryable, workspaceId: string): Promise<T
     action: row.action,
     effect: row.effect,
     slackUserIds: row.slack_user_ids ?? [],
+    teamsAadUserIds: row.teams_aad_user_ids ?? [],
     roleNames: row.role_names ?? [],
   }));
 }
@@ -561,22 +670,30 @@ async function loadPolicy(pool: Queryable, workspaceId: string) {
      LIMIT 1`,
     [workspaceId],
   );
+  const teamsDmUsers = await pool.query(
+    `SELECT conditions->'allowedTeamsDmUserIds' AS ids
+     FROM policy_rules
+     WHERE workspace_id = $1 AND name = 'msteams-dm-allowlist' AND enabled = true
+     ORDER BY priority ASC
+     LIMIT 1`,
+    [workspaceId],
+  );
   const channelRows = await pool.query(
-    `SELECT channel_id, name, enabled, require_mention, allowed_user_ids, denied_user_ids
+    `SELECT channel_type, team_id, channel_id, name, enabled, require_mention, allowed_user_ids, denied_user_ids
      FROM channel_policies
      WHERE workspace_id = $1
-     ORDER BY channel_id`,
+     ORDER BY channel_type, team_id NULLS FIRST, channel_id`,
     [workspaceId],
   );
   const toolRows = await pool.query(
-    `SELECT tool, action, effect, slack_user_ids, role_names
+    `SELECT tool, action, effect, slack_user_ids, teams_aad_user_ids, role_names
      FROM tool_policies
      WHERE workspace_id = $1
      ORDER BY tool, action, effect, created_at`,
     [workspaceId],
   );
   const approvalRows = await pool.query(
-    `SELECT name, action_pattern, resource_pattern, approver_slack_user_ids, min_approvals, enabled
+    `SELECT name, action_pattern, resource_pattern, approver_slack_user_ids, approver_teams_user_ids, min_approvals, enabled
      FROM approval_policies
      WHERE workspace_id = $1
      ORDER BY created_at`,
@@ -584,7 +701,10 @@ async function loadPolicy(pool: Queryable, workspaceId: string) {
   );
   return {
     allowedDmUserIds: Array.isArray(dmUsers.rows[0]?.ids) ? dmUsers.rows[0].ids : [],
+    allowedTeamsDmUserIds: Array.isArray(teamsDmUsers.rows[0]?.ids) ? teamsDmUsers.rows[0].ids : [],
     channelPolicies: channelRows.rows.map((row): ChannelPolicyRecord => ({
+      channelType: row.channel_type,
+      teamId: row.team_id ? row.team_id : null,
       channelId: row.channel_id,
       name: row.name,
       enabled: row.enabled,
@@ -597,6 +717,7 @@ async function loadPolicy(pool: Queryable, workspaceId: string) {
       action: row.action,
       effect: row.effect,
       slackUserIds: row.slack_user_ids ?? [],
+      teamsAadUserIds: row.teams_aad_user_ids ?? [],
       roleNames: row.role_names ?? [],
     })),
     approvalPolicies: approvalRows.rows.map((row): ApprovalPolicyRecord => ({
@@ -604,6 +725,7 @@ async function loadPolicy(pool: Queryable, workspaceId: string) {
       actionPattern: row.action_pattern,
       resourcePattern: row.resource_pattern,
       approverSlackUserIds: row.approver_slack_user_ids ?? [],
+      approverTeamsUserIds: row.approver_teams_user_ids ?? [],
       minApprovals: row.min_approvals,
       enabled: row.enabled,
     })),
@@ -618,14 +740,31 @@ async function replacePolicy(pool: Queryable, workspaceId: string, input: Return
      DO UPDATE SET conditions = EXCLUDED.conditions, enabled = true`,
     [workspaceId, { allowedDmUserIds: input.allowedDmUserIds }],
   );
+  await pool.query(
+    `INSERT INTO policy_rules (workspace_id, name, effect, resource, action, conditions, priority, enabled)
+     VALUES ($1, 'msteams-dm-allowlist', 'allow', 'msteams_dm', 'message', $2, 10, true)
+     ON CONFLICT (workspace_id, name)
+     DO UPDATE SET conditions = EXCLUDED.conditions, enabled = true`,
+    [workspaceId, { allowedTeamsDmUserIds: input.allowedTeamsDmUserIds }],
+  );
 
-  await pool.query("DELETE FROM channel_policies WHERE workspace_id = $1", [workspaceId]);
+  // Only delete the platforms present in this payload so a Slack-only update
+  // cannot silently wipe Teams channel rows (and vice versa).
+  const presentChannelTypes = Array.from(new Set(input.channelPolicies.map((policy) => policy.channelType ?? "slack")));
+  if (presentChannelTypes.length > 0) {
+    await pool.query(
+      "DELETE FROM channel_policies WHERE workspace_id = $1 AND channel_type = ANY($2::text[])",
+      [workspaceId, presentChannelTypes],
+    );
+  }
   for (const policy of input.channelPolicies) {
     await pool.query(
-      `INSERT INTO channel_policies (workspace_id, channel_id, name, enabled, require_mention, allowed_user_ids, denied_user_ids)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO channel_policies (workspace_id, channel_type, team_id, channel_id, name, enabled, require_mention, allowed_user_ids, denied_user_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         workspaceId,
+        policy.channelType ?? "slack",
+        policy.teamId ?? "",
         policy.channelId,
         policy.name ?? null,
         policy.enabled,
@@ -639,23 +778,24 @@ async function replacePolicy(pool: Queryable, workspaceId: string, input: Return
   await pool.query("DELETE FROM tool_policies WHERE workspace_id = $1", [workspaceId]);
   for (const policy of input.toolPolicies) {
     await pool.query(
-      `INSERT INTO tool_policies (workspace_id, tool, action, effect, slack_user_ids, role_names)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [workspaceId, policy.tool, policy.action, policy.effect, policy.slackUserIds, policy.roleNames],
+      `INSERT INTO tool_policies (workspace_id, tool, action, effect, slack_user_ids, teams_aad_user_ids, role_names)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [workspaceId, policy.tool, policy.action, policy.effect, policy.slackUserIds, policy.teamsAadUserIds ?? [], policy.roleNames],
     );
   }
 
   await pool.query("DELETE FROM approval_policies WHERE workspace_id = $1", [workspaceId]);
   for (const policy of input.approvalPolicies) {
     await pool.query(
-      `INSERT INTO approval_policies (workspace_id, name, action_pattern, resource_pattern, approver_slack_user_ids, min_approvals, enabled)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO approval_policies (workspace_id, name, action_pattern, resource_pattern, approver_slack_user_ids, approver_teams_user_ids, min_approvals, enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         workspaceId,
         policy.name,
         policy.actionPattern,
         policy.resourcePattern,
         policy.approverSlackUserIds,
+        policy.approverTeamsUserIds ?? [],
         policy.minApprovals,
         policy.enabled,
       ],
@@ -705,7 +845,25 @@ function openClawSandboxModeFromEnv(): "off" | "docker" {
 
 async function generateAndPersistOpenClawConfig(pool: Queryable, workspaceId: string): Promise<GeneratedOpenClawConfig> {
   const settings = await pool.query("SELECT model_provider, model_name FROM workspace_settings WHERE workspace_id = $1", [workspaceId]);
-  const workspace = await pool.query("SELECT openclaw_gateway_url, openclaw_config_path FROM workspaces WHERE id = $1", [workspaceId]);
+  const workspace = await pool.query(
+    `SELECT openclaw_gateway_url, openclaw_config_path, teams_app_id, teams_tenant_id,
+            msteams_webhook_port, msteams_webhook_path
+     FROM workspaces
+     WHERE id = $1`,
+    [workspaceId],
+  );
+  const teamsAppPassword = await pool.query(
+    "SELECT 1 FROM integration_credentials WHERE workspace_id = $1 AND secret_ref_id = $2 LIMIT 1",
+    [workspaceId, buildSecretRefId(workspaceId, "msteams/appPassword")],
+  );
+  const slackBotToken = await pool.query(
+    "SELECT 1 FROM integration_credentials WHERE workspace_id = $1 AND secret_ref_id = $2 LIMIT 1",
+    [workspaceId, buildSecretRefId(workspaceId, "slack/botToken")],
+  );
+  const slackAppToken = await pool.query(
+    "SELECT 1 FROM integration_credentials WHERE workspace_id = $1 AND secret_ref_id = $2 LIMIT 1",
+    [workspaceId, buildSecretRefId(workspaceId, "slack/appToken")],
+  );
   const policy = await loadPolicy(pool, workspaceId);
   const configPath = workspace.rows[0]?.openclaw_config_path || process.env.OPENCLAW_CONFIG_PATH || "/operant/openclaw/openclaw.json";
   const configDir = path.dirname(configPath);
@@ -718,9 +876,17 @@ async function generateAndPersistOpenClawConfig(pool: Queryable, workspaceId: st
     modelName: settings.rows[0]?.model_name ?? "gpt-5",
     sandboxMode: openClawSandboxModeFromEnv(),
     dmAllowFrom: policy.allowedDmUserIds,
+    teamsDmAllowFrom: policy.allowedTeamsDmUserIds,
     channelPolicies: policy.channelPolicies,
     toolPolicies: policy.toolPolicies,
     approvalPolicies: policy.approvalPolicies,
+    slackBotTokenConfigured: Boolean(slackBotToken.rowCount),
+    slackAppTokenConfigured: Boolean(slackAppToken.rowCount),
+    teamsAppId: workspace.rows[0]?.teams_app_id ?? null,
+    teamsAppPasswordConfigured: Boolean(teamsAppPassword.rowCount),
+    teamsTenantId: workspace.rows[0]?.teams_tenant_id ?? null,
+    msteamsWebhookPort: workspace.rows[0]?.msteams_webhook_port ?? null,
+    msteamsWebhookPath: workspace.rows[0]?.msteams_webhook_path ?? null,
     secretResolverCommand,
     secretResolverScript,
   });
@@ -774,9 +940,26 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
   })) return;
   const rawBody = await readJson(req);
   const body = z.object({
-    slackUserId: slackIdSchema,
+    slackUserId: slackIdSchema.optional(),
+    teamsAadUserId: teamsAadUserIdSchema.optional(),
+    platform: z.enum(chatPlatforms).optional(),
     adminLoginToken: z.string().min(1).optional(),
+  }).superRefine((input, ctx) => {
+    if (!input.slackUserId && !input.teamsAadUserId) {
+      ctx.addIssue({ code: "custom", path: ["slackUserId"], message: "Provide a slackUserId, teamsAadUserId, or both" });
+    }
+    if (input.slackUserId && input.teamsAadUserId && !input.platform) {
+      ctx.addIssue({ code: "custom", path: ["platform"], message: "When sending both slackUserId and teamsAadUserId, set platform to 'slack' or 'msteams' to disambiguate" });
+    }
+    if (input.platform === "slack" && !input.slackUserId) {
+      ctx.addIssue({ code: "custom", path: ["slackUserId"], message: "platform 'slack' requires slackUserId" });
+    }
+    if (input.platform === "msteams" && !input.teamsAadUserId) {
+      ctx.addIssue({ code: "custom", path: ["teamsAadUserId"], message: "platform 'msteams' requires teamsAadUserId" });
+    }
   }).parse(rawBody);
+  const platform: ChatPlatform = body.platform ?? (body.slackUserId ? "slack" : "msteams");
+  const principalId = platform === "slack" ? body.slackUserId : body.teamsAadUserId;
   const adminToken = adminLoginTokenValidation(req, rawBody);
   if (!adminToken.ok) {
     await audit(state.pool, {
@@ -785,22 +968,25 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       eventType: "auth.login_denied",
       resourceType: "admin_session",
       outcome: "deny",
-      metadata: { slackUserId: body.slackUserId, reason: "admin_login_token" },
+      metadata: { slackUserId: body.slackUserId, teamsAadUserId: body.teamsAadUserId, platform, reason: "admin_login_token" },
     });
     if (adminToken.statusCode === 401) authRateLimit.recordFailure(ip);
     sendJson(res, adminToken.statusCode, { error: adminToken.error });
     return;
   }
   const result = await state.pool.query(
-    `SELECT u.id AS user_id, u.slack_user_id, array_agg(DISTINCT r.name) AS roles
+    `SELECT u.id AS user_id, u.slack_user_id, u.teams_aad_user_id, array_agg(DISTINCT r.name) AS roles
      FROM users u
      JOIN role_assignments ra ON ra.user_id = u.id
      JOIN roles r ON r.id = ra.role_id
      WHERE u.company_id = $1
-       AND u.slack_user_id = $2
-       AND (ra.workspace_id = $3 OR ra.workspace_id IS NULL)
-     GROUP BY u.id, u.slack_user_id`,
-    [workspace.company_id, body.slackUserId, workspace.id],
+       AND (
+         ($2 = 'slack' AND u.slack_user_id = $3)
+         OR ($2 = 'msteams' AND u.teams_aad_user_id = $3)
+       )
+       AND (ra.workspace_id = $4 OR ra.workspace_id IS NULL)
+     GROUP BY u.id, u.slack_user_id, u.teams_aad_user_id`,
+    [workspace.company_id, platform, principalId, workspace.id],
   );
   if (!result.rowCount) {
     const userCount = await state.pool.query(
@@ -815,11 +1001,11 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       eventType: "auth.login_denied",
       resourceType: "admin_session",
       outcome: "deny",
-      metadata: { slackUserId: body.slackUserId, code },
+      metadata: { slackUserId: body.slackUserId, teamsAadUserId: body.teamsAadUserId, platform, code },
     });
     authRateLimit.recordFailure(ip);
     sendJson(res, 403, {
-      error: bootstrapRequired ? "Workspace not bootstrapped" : "No Operant role assignment for Slack user",
+      error: bootstrapRequired ? "Workspace not bootstrapped" : "No Operant role assignment for chat user",
       code,
     });
     return;
@@ -830,10 +1016,10 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
   try {
     await client.query("BEGIN");
     const session = await client.query(
-      `INSERT INTO admin_sessions (user_id, workspace_id, token_hash, expires_at)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO admin_sessions (user_id, workspace_id, token_hash, expires_at, principal_platform)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, expires_at`,
-      [result.rows[0].user_id, workspace.id, tokenHash, expiresAt],
+      [result.rows[0].user_id, workspace.id, tokenHash, expiresAt, platform],
     );
     await audit(client, {
       companyId: workspace.company_id,
@@ -842,6 +1028,7 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       eventType: "auth.login",
       resourceType: "admin_session",
       resourceId: session.rows[0].id,
+      metadata: { platform },
     });
     await client.query("COMMIT");
     authRateLimit.reset(ip);
@@ -852,6 +1039,8 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       user: {
         id: result.rows[0].user_id,
         slackUserId: result.rows[0].slack_user_id,
+        teamsAadUserId: result.rows[0].teams_aad_user_id,
+        platform,
         roles: result.rows[0].roles ?? [],
       },
     });
@@ -871,7 +1060,17 @@ async function handleAuthMe(context: RouteContext): Promise<void> {
     sendJson(res, 401, { error: "Missing or invalid Operant admin session" });
     return;
   }
-  sendJson(res, 200, { user: actor, workspaceId: workspace.id });
+  sendJson(res, 200, {
+    user: {
+      userId: actor.userId,
+      slackUserId: actor.slackUserId,
+      teamsAadUserId: actor.teamsAadUserId,
+      chatPlatform: actor.chatPlatform,
+      principalId: actor.principalId,
+      roles: actor.roles,
+    },
+    workspaceId: workspace.id,
+  });
 }
 
 async function handleAuthLogout(context: RouteContext): Promise<void> {
@@ -916,6 +1115,10 @@ async function handleGetSettings(context: RouteContext): Promise<void> {
     workspaceId: workspace.id,
     workspaceName: workspace.name,
     slackTeamId: workspace.slack_team_id,
+    teamsAppId: workspace.teams_app_id,
+    teamsTenantId: workspace.teams_tenant_id,
+    msteamsWebhookPort: workspace.msteams_webhook_port,
+    msteamsWebhookPath: workspace.msteams_webhook_path,
     openclawGatewayUrl: workspace.openclaw_gateway_url,
     modelProvider: settings.rows[0]?.model_provider ?? "openai",
     modelName: settings.rows[0]?.model_name ?? "gpt-5",
@@ -944,11 +1147,19 @@ async function handleUpdateSettings(context: RouteContext): Promise<void> {
       `UPDATE workspaces
        SET name = $1,
            slack_team_id = $2,
-           openclaw_gateway_url = $3
-       WHERE id = $4`,
+           teams_app_id = $3,
+           teams_tenant_id = $4,
+           msteams_webhook_port = $5,
+           msteams_webhook_path = $6,
+           openclaw_gateway_url = $7
+       WHERE id = $8`,
       [
         input.workspaceName ?? workspace.name,
         input.slackTeamId === undefined ? workspace.slack_team_id : input.slackTeamId,
+        input.teamsAppId === undefined ? workspace.teams_app_id : input.teamsAppId,
+        input.teamsTenantId === undefined ? workspace.teams_tenant_id : input.teamsTenantId,
+        input.msteamsWebhookPort ?? workspace.msteams_webhook_port ?? 3978,
+        input.msteamsWebhookPath ?? workspace.msteams_webhook_path ?? "/api/messages",
         input.openclawGatewayUrl ?? workspace.openclaw_gateway_url,
         workspace.id,
       ],
@@ -960,7 +1171,7 @@ async function handleUpdateSettings(context: RouteContext): Promise<void> {
       [modelProvider, modelName, retentionDays, workspace.id],
     );
     let generated: GeneratedOpenClawConfig | null = null;
-    if (input.modelProvider || input.modelName || input.openclawGatewayUrl) {
+    if (input.modelProvider || input.modelName || input.openclawGatewayUrl || input.teamsAppId !== undefined || input.teamsTenantId !== undefined || input.msteamsWebhookPort || input.msteamsWebhookPath) {
       generated = await generateAndPersistOpenClawConfig(client, workspace.id);
     }
     await audit(client, {
@@ -982,6 +1193,10 @@ async function handleUpdateSettings(context: RouteContext): Promise<void> {
         companyName: input.companyName ?? workspace.company_name,
         workspaceName: input.workspaceName ?? workspace.name,
         slackTeamId: input.slackTeamId === undefined ? workspace.slack_team_id : input.slackTeamId,
+        teamsAppId: input.teamsAppId === undefined ? workspace.teams_app_id : input.teamsAppId,
+        teamsTenantId: input.teamsTenantId === undefined ? workspace.teams_tenant_id : input.teamsTenantId,
+        msteamsWebhookPort: input.msteamsWebhookPort ?? workspace.msteams_webhook_port ?? 3978,
+        msteamsWebhookPath: input.msteamsWebhookPath ?? workspace.msteams_webhook_path ?? "/api/messages",
         openclawGatewayUrl: input.openclawGatewayUrl ?? workspace.openclaw_gateway_url,
         modelProvider,
         modelName,
@@ -1017,23 +1232,27 @@ async function handleCredentials(context: RouteContext): Promise<void> {
       sendJson(res, adminToken.statusCode, { error: adminToken.error });
       return;
     }
-    if (!input.adminSlackUserId) {
+    if (!input.adminSlackUserId && !input.adminTeamsAadUserId) {
       await audit(state.pool, {
         companyId: workspace.company_id,
         workspaceId: workspace.id,
         eventType: "credentials.bootstrap_denied",
         resourceType: "workspace",
         outcome: "deny",
-        metadata: { reason: "owner_slack_user_id" },
+        metadata: { reason: "owner_principal" },
       });
-      sendJson(res, 400, { error: "First credential setup requires an adminSlackUserId to create the workspace owner" });
+      sendJson(res, 400, { error: "First credential setup requires an adminSlackUserId or adminTeamsAadUserId to create the workspace owner" });
       return;
     }
-    const missingSecrets = [
-      input.slackBotToken ? null : "slackBotToken",
-      input.slackAppToken ? null : "slackAppToken",
-      input.modelApiKey ? null : "modelApiKey",
-    ].filter((name): name is string => name !== null);
+    // A workspace boots with at least one chat transport (Slack bot+app pair or
+    // a Teams app password) plus a model API key. The schema superRefine already
+    // rejects a half-configured Slack pair and a no-transport payload; this gate
+    // surfaces the friendly bootstrap-specific message.
+    const slackTransportConfigured = Boolean(input.slackBotToken && input.slackAppToken);
+    const teamsTransportConfigured = Boolean(input.teamsAppPassword);
+    const missingSecrets: string[] = [];
+    if (!slackTransportConfigured && !teamsTransportConfigured) missingSecrets.push("slackBotToken+slackAppToken or teamsAppPassword");
+    if (!input.modelApiKey) missingSecrets.push("modelApiKey");
     if (missingSecrets.length > 0) {
       await audit(state.pool, {
         companyId: workspace.company_id,
@@ -1053,7 +1272,7 @@ async function handleCredentials(context: RouteContext): Promise<void> {
   try {
     await client.query("BEGIN");
     const existingApprovalPolicy = await client.query(
-      `SELECT approver_slack_user_ids
+      `SELECT approver_slack_user_ids, approver_teams_user_ids
        FROM approval_policies
        WHERE workspace_id = $1 AND name = 'risky-actions'
        LIMIT 1`,
@@ -1062,27 +1281,57 @@ async function handleCredentials(context: RouteContext): Promise<void> {
     const existingApprovalSlackUserIds = Array.isArray(existingApprovalPolicy.rows[0]?.approver_slack_user_ids)
       ? existingApprovalPolicy.rows[0].approver_slack_user_ids
       : [];
+    const rawSlackApprovers = (rawBody && typeof rawBody === "object" && "approvalSlackUserIds" in rawBody)
+      ? input.approvalSlackUserIds
+      : existingApprovalSlackUserIds;
     const approvalSlackUserIds = Array.from(new Set([
       ...(input.adminSlackUserId ? [input.adminSlackUserId] : []),
-      ...(input.approvalSlackUserIds.length > 0 ? input.approvalSlackUserIds : existingApprovalSlackUserIds),
+      ...rawSlackApprovers,
     ].filter(Boolean)));
-    if (approvalSlackUserIds.length === 0) {
+    const existingApprovalTeamsUserIds = Array.isArray(existingApprovalPolicy.rows[0]?.approver_teams_user_ids)
+      ? existingApprovalPolicy.rows[0].approver_teams_user_ids
+      : [];
+    const rawTeamsApprovers = (rawBody && typeof rawBody === "object" && "approvalTeamsUserIds" in rawBody)
+      ? input.approvalTeamsUserIds
+      : existingApprovalTeamsUserIds;
+    const approvalTeamsUserIds = Array.from(new Set([
+      ...(input.adminTeamsAadUserId ? [input.adminTeamsAadUserId] : []),
+      ...rawTeamsApprovers,
+    ].filter(Boolean)));
+    if (approvalSlackUserIds.length === 0 && approvalTeamsUserIds.length === 0) {
       await client.query("ROLLBACK");
-      sendJson(res, 400, { error: "At least one approval user is required for the default risky-actions approval policy" });
+      sendJson(res, 400, { error: "At least one Slack or Teams approval user is required for the default risky-actions approval policy" });
       return;
     }
     const allowedDmUserIds = Array.from(new Set([
       ...(input.adminSlackUserId ? [input.adminSlackUserId] : []),
       ...input.allowedDmUserIds,
     ].filter(Boolean)));
+    const allowedTeamsDmUserIds = Array.from(new Set([
+      ...(input.adminTeamsAadUserId ? [input.adminTeamsAadUserId] : []),
+      ...input.allowedTeamsDmUserIds,
+    ].filter(Boolean)));
     if (input.companyName) {
       await client.query("UPDATE companies SET name = $1 WHERE id = $2", [input.companyName, workspace.company_id]);
     }
     await client.query(
       `UPDATE workspaces
-       SET name = $1, slack_team_id = COALESCE($2, slack_team_id)
-       WHERE id = $3`,
-      [input.workspaceName ?? workspace.name, input.slackTeamId ?? null, workspace.id],
+       SET name = $1,
+           slack_team_id = COALESCE($2, slack_team_id),
+           teams_app_id = COALESCE($3, teams_app_id),
+           teams_tenant_id = COALESCE($4, teams_tenant_id),
+           msteams_webhook_port = COALESCE($5, msteams_webhook_port),
+           msteams_webhook_path = COALESCE($6, msteams_webhook_path)
+       WHERE id = $7`,
+      [
+        input.workspaceName ?? workspace.name,
+        input.slackTeamId ?? null,
+        input.teamsAppId ?? null,
+        input.teamsTenantId ?? null,
+        input.msteamsWebhookPort ?? null,
+        input.msteamsWebhookPath ?? null,
+        workspace.id,
+      ],
     );
     await client.query(
       `UPDATE workspace_settings
@@ -1096,6 +1345,9 @@ async function handleCredentials(context: RouteContext): Promise<void> {
     }
     if (input.slackAppToken) {
       await upsertCredential(client, state.masterKey, workspace.id, "slack", "Slack app token", buildSecretRefId(workspace.id, "slack/appToken"), input.slackAppToken);
+    }
+    if (input.teamsAppPassword) {
+      await upsertCredential(client, state.masterKey, workspace.id, "msteams", "Microsoft Teams app password", buildSecretRefId(workspace.id, "msteams/appPassword"), input.teamsAppPassword);
     }
     if (input.modelApiKey) {
       await upsertCredential(
@@ -1121,15 +1373,36 @@ async function handleCredentials(context: RouteContext): Promise<void> {
        WHERE workspace_id = $1 AND name = 'slack-dm-allowlist'`,
       [workspace.id, { allowedDmUserIds }],
     );
+    await client.query(
+      `INSERT INTO policy_rules (workspace_id, name, effect, resource, action, conditions, priority)
+       VALUES ($1, 'msteams-dm-allowlist', 'allow', 'msteams_dm', 'message', $2, 10)
+       ON CONFLICT DO NOTHING`,
+      [workspace.id, { allowedTeamsDmUserIds }],
+    );
+    await client.query(
+      `UPDATE policy_rules
+       SET conditions = $2
+       WHERE workspace_id = $1 AND name = 'msteams-dm-allowlist'`,
+      [workspace.id, { allowedTeamsDmUserIds }],
+    );
 
     await client.query("DELETE FROM channel_policies WHERE workspace_id = $1 AND name = 'Credential setup allowlist'", [workspace.id]);
     for (const channelId of input.allowedChannelIds) {
       await client.query(
-        `INSERT INTO channel_policies (workspace_id, channel_id, name, enabled, require_mention, allowed_user_ids)
-         VALUES ($1, $2, 'Credential setup allowlist', true, true, $3)
+        `INSERT INTO channel_policies (workspace_id, channel_type, team_id, channel_id, name, enabled, require_mention, allowed_user_ids)
+         VALUES ($1, 'slack', '', $2, 'Credential setup allowlist', true, true, $3)
          ON CONFLICT (workspace_id, channel_type, team_id, channel_id)
          DO UPDATE SET name = COALESCE(channel_policies.name, EXCLUDED.name), enabled = true, require_mention = true, allowed_user_ids = EXCLUDED.allowed_user_ids, updated_at = now()`,
         [workspace.id, channelId, []],
+      );
+    }
+    for (const policy of input.teamsChannelPolicies) {
+      await client.query(
+        `INSERT INTO channel_policies (workspace_id, channel_type, team_id, channel_id, name, enabled, require_mention, allowed_user_ids)
+         VALUES ($1, 'msteams', $2, $3, COALESCE($4, 'Credential setup Teams allowlist'), true, true, $5)
+         ON CONFLICT (workspace_id, channel_type, team_id, channel_id)
+         DO UPDATE SET name = COALESCE(channel_policies.name, EXCLUDED.name), enabled = true, require_mention = true, allowed_user_ids = EXCLUDED.allowed_user_ids, updated_at = now()`,
+        [workspace.id, policy.teamId, policy.channelId, policy.name ?? null, policy.allowedUserIds],
       );
     }
 
@@ -1137,6 +1410,7 @@ async function handleCredentials(context: RouteContext): Promise<void> {
       `DELETE FROM tool_policies
        WHERE workspace_id = $1
          AND COALESCE(array_length(slack_user_ids, 1), 0) = 0
+         AND COALESCE(array_length(teams_aad_user_ids, 1), 0) = 0
          AND COALESCE(array_length(role_names, 1), 0) = 0
          AND ((tool = 'slack' AND action IN ('messages', 'reactions', 'pins')) OR (tool = 'exec' AND action = '*'))`,
       [workspace.id],
@@ -1158,18 +1432,66 @@ async function handleCredentials(context: RouteContext): Promise<void> {
       [workspace.id, approvalSlackUserIds],
     );
     await client.query(
-      `UPDATE approval_policies SET approver_slack_user_ids = $2 WHERE workspace_id = $1 AND name = 'risky-actions'`,
-      [workspace.id, approvalSlackUserIds],
+      `UPDATE approval_policies SET approver_slack_user_ids = $2, approver_teams_user_ids = $3 WHERE workspace_id = $1 AND name = 'risky-actions'`,
+      [workspace.id, approvalSlackUserIds, approvalTeamsUserIds],
     );
 
-    if (input.adminSlackUserId) {
-      const user = await client.query(
-        `INSERT INTO users (company_id, slack_user_id, name)
-         VALUES ($1, $2, 'Workspace Owner')
-         ON CONFLICT (company_id, slack_user_id) DO UPDATE SET slack_user_id = EXCLUDED.slack_user_id
-         RETURNING id`,
-        [workspace.company_id, input.adminSlackUserId],
+    let ownerIdentityMerge: { mergedSlackUserId?: string; mergedTeamsAadUserId?: string } | null = null;
+    if (input.adminSlackUserId || input.adminTeamsAadUserId) {
+      // The legacy ON CONFLICT (company_id, slack_user_id) upsert cannot serve a
+      // Teams-only owner: NULL slack_user_id never conflicts, so a re-run would
+      // insert duplicate rows. SELECT by (slack OR teams) first, then UPDATE the
+      // single match (COALESCE-linking the other principal) or INSERT a fresh row.
+      const existingOwner = await client.query(
+        `SELECT id, slack_user_id, teams_aad_user_id FROM users
+         WHERE company_id = $1
+           AND (
+             ($2::text IS NOT NULL AND slack_user_id = $2)
+             OR ($3::text IS NOT NULL AND teams_aad_user_id = $3)
+           )`,
+        [workspace.company_id, input.adminSlackUserId ?? null, input.adminTeamsAadUserId ?? null],
       );
+      const distinctOwnerIds = Array.from(new Set(existingOwner.rows.map((row) => row.id)));
+      if (distinctOwnerIds.length > 1) {
+        await client.query("ROLLBACK");
+        sendJson(res, 409, { error: "adminSlackUserId and adminTeamsAadUserId belong to different existing users; merge them via /api/users before reusing as workspace owner" });
+        return;
+      }
+      if (distinctOwnerIds.length === 1) {
+        const existingRow = existingOwner.rows[0];
+        if (input.adminSlackUserId && !existingRow.slack_user_id) {
+          ownerIdentityMerge = { ...(ownerIdentityMerge ?? {}), mergedSlackUserId: input.adminSlackUserId };
+        }
+        if (input.adminTeamsAadUserId && !existingRow.teams_aad_user_id) {
+          ownerIdentityMerge = { ...(ownerIdentityMerge ?? {}), mergedTeamsAadUserId: input.adminTeamsAadUserId };
+        }
+      }
+      const user = distinctOwnerIds.length === 1
+        ? await client.query(
+          `UPDATE users
+           SET slack_user_id = COALESCE($2, slack_user_id),
+               teams_aad_user_id = COALESCE($3, teams_aad_user_id)
+           WHERE id = $1
+           RETURNING id`,
+          [distinctOwnerIds[0], input.adminSlackUserId ?? null, input.adminTeamsAadUserId ?? null],
+        )
+        : await client.query(
+          `INSERT INTO users (company_id, slack_user_id, teams_aad_user_id, name)
+           VALUES ($1, $2, $3, 'Workspace Owner')
+           RETURNING id`,
+          [workspace.company_id, input.adminSlackUserId ?? null, input.adminTeamsAadUserId ?? null],
+        );
+      if (ownerIdentityMerge) {
+        await audit(client, {
+          companyId: workspace.company_id,
+          workspaceId: workspace.id,
+          actorUserId: user.rows[0].id,
+          eventType: "users.identity_merged",
+          resourceType: "user",
+          resourceId: user.rows[0].id,
+          metadata: ownerIdentityMerge,
+        });
+      }
       await client.query(
         `INSERT INTO role_assignments (role_id, user_id, workspace_id)
          SELECT r.id, $2, $3 FROM roles r WHERE r.company_id = $1 AND r.name = 'owner'
@@ -1186,10 +1508,13 @@ async function handleCredentials(context: RouteContext): Promise<void> {
       resourceType: "workspace",
       resourceId: workspace.id,
       metadata: {
-        slackConfigured: true,
+        slackConfigured: Boolean(input.slackBotToken && input.slackAppToken),
+        teamsConfigured: Boolean(input.teamsAppPassword),
         modelProvider: input.modelProvider,
         allowedDmUsers: allowedDmUserIds.length,
+        allowedTeamsDmUsers: allowedTeamsDmUserIds.length,
         allowedChannels: input.allowedChannelIds.length,
+        teamsChannelPolicies: input.teamsChannelPolicies.length,
         configChecksum: generated.checksum,
       },
     });
@@ -1917,9 +2242,13 @@ async function handlePolicyEvaluate(context: RouteContext): Promise<void> {
   const allowed = await requirePermissionForWorkspace(context, workspace, { action: "policy:read", resource: "policy" });
   if (!allowed.ok) return;
   const parsedInput = policyEvaluationSchema.parse(await readJson(req));
+  const channelType = parsedInput.channelType ?? "slack";
+  const principalId = channelType === "msteams"
+    ? parsedInput.teamsAadUserId ?? parsedInput.principalId ?? ""
+    : parsedInput.slackUserId ?? parsedInput.principalId ?? "";
   const input = {
     ...parsedInput,
-    userRoleNames: await loadSlackUserRoleNames(state.pool, workspace.company_id, workspace.id, parsedInput.slackUserId ?? ""),
+    userRoleNames: await loadChatPrincipalRoleNames(state.pool, workspace.company_id, workspace.id, channelType, principalId),
   };
   const policy = await loadPolicy(state.pool, workspace.id);
   const decision = evaluatePolicy(input, policy);
@@ -2002,7 +2331,7 @@ async function handleCreateApproval(context: RouteContext): Promise<void> {
     await client.query("BEGIN");
     const policy = await loadPolicy(client, workspace.id);
     const approvalRequirement = summarizeApprovalRequirement({ action: body.action, resource: body.resource }, policy);
-    if (approvalRequirement.matchedPolicyCount < 1 || approvalRequirement.approverSlackUserIds.length < 1) {
+    if (approvalRequirement.matchedPolicyCount < 1 || (approvalRequirement.approverSlackUserIds.length + approvalRequirement.approverTeamsUserIds.length) < 1) {
       await audit(client, {
         companyId: workspace.company_id,
         workspaceId: workspace.id,
@@ -2159,7 +2488,7 @@ async function handleListUsers(context: RouteContext): Promise<void> {
   const allowed = await requirePermissionForWorkspace(context, workspace, { action: "users:read", resource: "user" });
   if (!allowed.ok) return;
   const result = await state.pool.query(
-    `SELECT u.id, u.email, u.name, u.slack_user_id, u.created_at,
+    `SELECT u.id, u.email, u.name, u.slack_user_id, u.teams_aad_user_id, u.teams_bot_user_id, u.teams_tenant_id, u.created_at,
             COALESCE(jsonb_agg(DISTINCT r.name) FILTER (WHERE r.id IS NOT NULL), '[]'::jsonb) AS roles
      FROM users u
      LEFT JOIN role_assignments ra ON ra.user_id = u.id AND (ra.workspace_id = $2 OR ra.workspace_id IS NULL)
@@ -2206,14 +2535,57 @@ async function handleUpsertUser(context: RouteContext): Promise<void> {
       return;
     }
 
-    const user = await client.query(
-      `INSERT INTO users (company_id, slack_user_id, email, name)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (company_id, slack_user_id)
-       DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name
-       RETURNING id, company_id, email, name, slack_user_id, created_at`,
-      [workspace.company_id, input.slackUserId, input.email ?? null, input.name ?? null],
+    const matchingUsers = await client.query(
+      `SELECT id
+       FROM users
+       WHERE company_id = $1
+         AND (
+           ($2::text IS NOT NULL AND slack_user_id = $2)
+           OR ($3::text IS NOT NULL AND teams_aad_user_id = $3)
+         )`,
+      [workspace.company_id, input.slackUserId ?? null, input.teamsAadUserId ?? null],
     );
+    const matchingIds = Array.from(new Set(matchingUsers.rows.map((row) => row.id)));
+    if (matchingIds.length > 1) {
+      await client.query("ROLLBACK");
+      sendJson(res, 409, { error: "Slack and Teams principals belong to different existing users" });
+      return;
+    }
+    const user = matchingIds.length === 1
+      ? await client.query(
+        `UPDATE users
+         SET slack_user_id = COALESCE($2, slack_user_id),
+             teams_aad_user_id = COALESCE($3, teams_aad_user_id),
+             teams_bot_user_id = COALESCE($4, teams_bot_user_id),
+             teams_tenant_id = COALESCE($5, teams_tenant_id),
+             email = $6,
+             name = $7
+         WHERE id = $1
+         RETURNING id, company_id, email, name, slack_user_id, teams_aad_user_id, teams_bot_user_id, teams_tenant_id, created_at`,
+        [
+          matchingIds[0],
+          input.slackUserId ?? null,
+          input.teamsAadUserId ?? null,
+          input.teamsBotUserId ?? null,
+          input.teamsTenantId ?? null,
+          input.email ?? null,
+          input.name ?? null,
+        ],
+      )
+      : await client.query(
+        `INSERT INTO users (company_id, slack_user_id, teams_aad_user_id, teams_bot_user_id, teams_tenant_id, email, name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, company_id, email, name, slack_user_id, teams_aad_user_id, teams_bot_user_id, teams_tenant_id, created_at`,
+        [
+          workspace.company_id,
+          input.slackUserId ?? null,
+          input.teamsAadUserId ?? null,
+          input.teamsBotUserId ?? null,
+          input.teamsTenantId ?? null,
+          input.email ?? null,
+          input.name ?? null,
+        ],
+      );
 
     const existingOwner = await client.query(
       `SELECT 1
@@ -2245,7 +2617,7 @@ async function handleUpsertUser(context: RouteContext): Promise<void> {
       eventType: "users.upserted",
       resourceType: "user",
       resourceId: user.rows[0].id,
-      metadata: { slackUserId: input.slackUserId, roles: input.roles },
+      metadata: { slackUserId: input.slackUserId, teamsAadUserId: input.teamsAadUserId, roles: input.roles },
     });
     await client.query("COMMIT");
     sendJson(res, 200, {
@@ -2291,6 +2663,10 @@ async function handleSummary(context: RouteContext): Promise<void> {
     workspaceId: workspace.id,
     workspaceName: workspace.name,
     slackTeamId: workspace.slack_team_id,
+    teamsAppId: workspace.teams_app_id,
+    teamsTenantId: workspace.teams_tenant_id,
+    msteamsWebhookPort: workspace.msteams_webhook_port,
+    msteamsWebhookPath: workspace.msteams_webhook_path,
     openclawGatewayUrl: workspace.openclaw_gateway_url,
     counts: counts.rows[0],
     latestConfig: latestConfig.rows[0] ?? null,
@@ -2340,12 +2716,17 @@ async function handleOpenClawEvent({ req, res, state }: RouteContext): Promise<v
     return;
   }
   const body = z.object({
-    workspaceId: z.string().uuid(),
+    workspaceId: z.uuid(),
     sessionKey: openClawEventIdSchema.optional(),
     runId: openClawEventIdSchema.optional(),
     type: openClawEventTypeSchema,
+    channelType: z.enum(["slack", "msteams"]).default("slack"),
+    principalId: openClawChatIdSchema.optional(),
+    channelId: openClawChatIdSchema.optional(),
     slackChannelId: openClawSlackIdSchema.optional(),
     slackUserId: openClawSlackIdSchema.optional(),
+    teamsConversationId: openClawChatIdSchema.optional(),
+    teamsAadUserId: z.uuid().optional(),
     usage: z.object({
       provider: openClawUsageLabelSchema.optional(),
       model: openClawUsageLabelSchema.optional(),
@@ -2355,6 +2736,26 @@ async function handleOpenClawEvent({ req, res, state }: RouteContext): Promise<v
       estimatedCostUsd: usageCostUsdSchema.optional(),
     }).optional(),
     metadata: metadataRecordSchema.default({}),
+  }).superRefine((input, ctx) => {
+    if (input.principalId !== undefined) {
+      if (input.channelType === "slack" && !slackIdSchema.safeParse(input.principalId).success) {
+        ctx.addIssue({ code: "custom", path: ["principalId"], message: "Slack channelType requires a Slack-shaped principalId" });
+      }
+      if (input.channelType === "msteams" && !teamsAadUserIdSchema.safeParse(input.principalId).success) {
+        ctx.addIssue({ code: "custom", path: ["principalId"], message: "Teams channelType requires an AAD UUID principalId" });
+      }
+    }
+    if (!input.sessionKey) return;
+    const principalForSlack = input.slackUserId
+      ?? (input.principalId && slackIdSchema.safeParse(input.principalId).success ? input.principalId : undefined);
+    const principalForTeams = input.teamsAadUserId
+      ?? (input.principalId && teamsAadUserIdSchema.safeParse(input.principalId).success ? input.principalId : undefined);
+    if (input.channelType === "slack" && !principalForSlack) {
+      ctx.addIssue({ code: "custom", path: ["slackUserId"], message: "Slack sessions require slackUserId or a Slack-shaped principalId" });
+    }
+    if (input.channelType === "msteams" && !principalForTeams) {
+      ctx.addIssue({ code: "custom", path: ["teamsAadUserId"], message: "Teams sessions require teamsAadUserId or an AAD UUID principalId" });
+    }
   }).parse(await readJson(req));
   const metadata = redactRecordForPersistence(body.metadata);
   const client = await state.pool.connect();
@@ -2368,13 +2769,40 @@ async function handleOpenClawEvent({ req, res, state }: RouteContext): Promise<v
     }
     let sessionId: string | null = null;
     if (body.sessionKey) {
+      const platformChannelId = body.channelType === "msteams"
+        ? body.teamsConversationId ?? null
+        : body.slackChannelId ?? null;
+      const platformPrincipalId = body.channelType === "msteams"
+        ? body.teamsAadUserId ?? null
+        : body.slackUserId ?? null;
+      const chatChannelId = body.channelId ?? platformChannelId;
+      const chatPrincipalId = body.principalId ?? platformPrincipalId;
       const session = await client.query(
-        `INSERT INTO sessions (workspace_id, openclaw_session_key, slack_channel_id, slack_user_id, metadata, last_event_at)
-         VALUES ($1, $2, $3, $4, $5, now())
+        `INSERT INTO sessions (workspace_id, openclaw_session_key, channel_type, chat_channel_id, chat_principal_id, slack_channel_id, slack_user_id, teams_conversation_id, teams_aad_user_id, metadata, last_event_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
          ON CONFLICT (workspace_id, openclaw_session_key)
-         DO UPDATE SET slack_channel_id = EXCLUDED.slack_channel_id, slack_user_id = EXCLUDED.slack_user_id, metadata = sessions.metadata || EXCLUDED.metadata, last_event_at = now()
+         DO UPDATE SET channel_type = EXCLUDED.channel_type,
+                       chat_channel_id = EXCLUDED.chat_channel_id,
+                       chat_principal_id = EXCLUDED.chat_principal_id,
+                       slack_channel_id = EXCLUDED.slack_channel_id,
+                       slack_user_id = EXCLUDED.slack_user_id,
+                       teams_conversation_id = EXCLUDED.teams_conversation_id,
+                       teams_aad_user_id = EXCLUDED.teams_aad_user_id,
+                       metadata = sessions.metadata || EXCLUDED.metadata,
+                       last_event_at = now()
          RETURNING id`,
-        [body.workspaceId, body.sessionKey, body.slackChannelId ?? null, body.slackUserId ?? null, metadata],
+        [
+          body.workspaceId,
+          body.sessionKey,
+          body.channelType,
+          chatChannelId,
+          chatPrincipalId,
+          body.channelType === "slack" ? body.slackChannelId ?? body.channelId ?? null : body.slackChannelId ?? null,
+          body.channelType === "slack" ? body.slackUserId ?? body.principalId ?? null : body.slackUserId ?? null,
+          body.channelType === "msteams" ? body.teamsConversationId ?? body.channelId ?? null : body.teamsConversationId ?? null,
+          body.channelType === "msteams" ? body.teamsAadUserId ?? body.principalId ?? null : body.teamsAadUserId ?? null,
+          metadata,
+        ],
       );
       sessionId = session.rows[0].id;
     }
@@ -2435,6 +2863,8 @@ async function handlePluginUserContext({ req, res, state }: RouteContext): Promi
   }
   const input = pluginUserContextRequestSchema.parse(await readJson(req));
   const workspace = await getWorkspace(state.pool);
+  // Pipedream tooling is Slack-only for v1, so the plugin user-context lookup
+  // stays keyed on slack_user_id (Teams sessions do not surface Pipedream tools).
   const session = await state.pool.query(
     `SELECT slack_user_id FROM sessions
      WHERE workspace_id = $1 AND openclaw_session_key = $2
@@ -2709,28 +3139,40 @@ function scopedListQuery(
   table: string,
   definition: { query: string },
   workspaceId: string,
-  actor: { actorUserId: string | null; actorSlackUserId: string | null; roles: string[] },
+  actor: Authorized,
 ): { query: string; params: unknown[] } {
   if (hasWorkspaceWideListAccess(table, actor.roles)) return { query: definition.query, params: [workspaceId] };
-  if (table === "sessions" && actor.actorSlackUserId) {
-    return {
-      query: `SELECT id, workspace_id, openclaw_session_key, slack_channel_id, slack_user_id, status, last_event_at, metadata, created_at
-              FROM sessions
-              WHERE workspace_id = $1 AND slack_user_id = $2
-              ORDER BY created_at DESC
-              LIMIT 100`,
-      params: [workspaceId, actor.actorSlackUserId],
-    };
-  }
-  if (table === "jobs" && actor.actorSlackUserId) {
+  if ((table === "sessions" || table === "jobs") && actor.actorChatPrincipals.length > 0) {
+    const slackId = actor.actorSlackUserId;
+    const teamsId = actor.actorTeamsAadUserId;
+    if (table === "sessions") {
+      return {
+        query: `SELECT id, workspace_id, openclaw_session_key, channel_type, chat_channel_id, chat_principal_id,
+                       slack_channel_id, slack_user_id, teams_conversation_id, teams_aad_user_id,
+                       status, last_event_at, metadata, created_at
+                FROM sessions
+                WHERE workspace_id = $1
+                  AND (
+                    ($2::text IS NOT NULL AND channel_type = 'slack' AND (chat_principal_id = $2 OR slack_user_id = $2))
+                    OR ($3::text IS NOT NULL AND channel_type = 'msteams' AND (chat_principal_id = $3 OR teams_aad_user_id = $3))
+                  )
+                ORDER BY created_at DESC
+                LIMIT 100`,
+        params: [workspaceId, slackId, teamsId],
+      };
+    }
     return {
       query: `SELECT j.id, j.workspace_id, j.session_id, j.openclaw_run_id, j.status, j.started_at, j.finished_at, j.metadata, j.created_at
               FROM jobs j
               JOIN sessions s ON s.id = j.session_id AND s.workspace_id = j.workspace_id
-              WHERE j.workspace_id = $1 AND s.slack_user_id = $2
+              WHERE j.workspace_id = $1
+                AND (
+                  ($2::text IS NOT NULL AND s.channel_type = 'slack' AND (s.chat_principal_id = $2 OR s.slack_user_id = $2))
+                  OR ($3::text IS NOT NULL AND s.channel_type = 'msteams' AND (s.chat_principal_id = $3 OR s.teams_aad_user_id = $3))
+                )
               ORDER BY j.created_at DESC
               LIMIT 100`,
-      params: [workspaceId, actor.actorSlackUserId],
+      params: [workspaceId, slackId, teamsId],
     };
   }
   if (table === "approvals") {
@@ -2740,11 +3182,12 @@ function scopedListQuery(
               WHERE workspace_id = $1
                 AND (
                   requested_by_user_id = $2
-                  OR COALESCE(payload->'operantApproval'->'approverSlackUserIds', '[]'::jsonb) ? $3
+                  OR ($3::text IS NOT NULL AND COALESCE(payload->'operantApproval'->'approverSlackUserIds', '[]'::jsonb) ? $3)
+                  OR ($4::text IS NOT NULL AND COALESCE(payload->'operantApproval'->'approverTeamsUserIds', '[]'::jsonb) ? $4)
                 )
               ORDER BY created_at DESC
               LIMIT 100`,
-      params: [workspaceId, actor.actorUserId, actor.actorSlackUserId ?? ""],
+      params: [workspaceId, actor.actorUserId, actor.actorSlackUserId, actor.actorTeamsAadUserId],
     };
   }
   return { query: definition.query, params: [workspaceId] };
@@ -2770,7 +3213,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
   const workspace = await getWorkspace(state.pool);
   const allowed = await requirePermissionForWorkspace(context, workspace, { action: "approval:decide", resource: "approval" });
   if (!allowed.ok) return;
-  const idResult = z.string().uuid().safeParse(url.pathname.split("/")[3]);
+  const idResult = z.uuid().safeParse(url.pathname.split("/")[3]);
   if (!idResult.success) {
     sendJson(res, 400, { error: "Invalid approval id" });
     return;
@@ -2794,11 +3237,29 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
       return;
     }
     const approvalRequirement = pending.rows[0]?.payload?.operantApproval ?? {};
-    const requiredApprovers = Array.isArray(approvalRequirement.approverSlackUserIds)
+    const requiredSlackApprovers = Array.isArray(approvalRequirement.approverSlackUserIds)
       ? Array.from(new Set(approvalRequirement.approverSlackUserIds.filter((value: unknown): value is string => typeof value === "string" && value.length > 0)))
       : [];
+    const requiredTeamsApprovers = Array.isArray(approvalRequirement.approverTeamsUserIds)
+      ? Array.from(new Set(approvalRequirement.approverTeamsUserIds.filter((value: unknown): value is string => typeof value === "string" && value.length > 0)))
+      : [];
+    const requiredApprovers = [
+      ...requiredSlackApprovers.map((value) => `slack:${value}`),
+      ...requiredTeamsApprovers.map((value) => `msteams:${value}`),
+    ];
     const minApprovals = Math.max(1, Number.isInteger(Number(approvalRequirement.minApprovals)) ? Number(approvalRequirement.minApprovals) : 1);
     const actorSlackUserId = allowed.actorSlackUserId;
+    const actorTeamsAadUserId = allowed.actorTeamsAadUserId;
+    // Prefer the principal for the platform the session was minted on so a
+    // dual-linked approver's decision attributes to the active chat platform.
+    const orderedPrincipals = [...allowed.actorChatPrincipals].sort((a, b) => {
+      if (a.platform === allowed.actorChatPlatform) return -1;
+      if (b.platform === allowed.actorChatPlatform) return 1;
+      return 0;
+    });
+    const actorPrincipals = orderedPrincipals.map((p) => `${p.platform}:${p.principalId}`);
+    const actorPrincipal = actorPrincipals.find((tag) => requiredApprovers.includes(tag))
+      ?? (allowed.actorChatPlatform && allowed.actorPrincipalId ? `${allowed.actorChatPlatform}:${allowed.actorPrincipalId}` : null);
     if (requiredApprovers.length < 1 || minApprovals > requiredApprovers.length) {
       await audit(client, {
         companyId: workspace.company_id,
@@ -2808,13 +3269,14 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
         resourceType: "approval",
         resourceId: id,
         outcome: "deny",
-        metadata: { reason: "invalid_approval_requirement", requiredApprovers, minApprovals, actorSlackUserId },
+        metadata: { reason: "invalid_approval_requirement", requiredApprovers, minApprovals, actorSlackUserId, actorTeamsAadUserId, actorPrincipal, actorPrincipals },
       });
       await client.query("COMMIT");
       sendJson(res, 409, { error: "Approval is missing a valid configured approver requirement", requiredApprovers, minApprovals });
       return;
     }
-    if (!actorSlackUserId || !requiredApprovers.includes(actorSlackUserId)) {
+    const matchingPrincipal = actorPrincipals.find((tag) => requiredApprovers.includes(tag));
+    if (!matchingPrincipal) {
       await audit(client, {
         companyId: workspace.company_id,
         workspaceId: workspace.id,
@@ -2823,7 +3285,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
         resourceType: "approval",
         resourceId: id,
         outcome: "deny",
-        metadata: { requiredApprovers, actorSlackUserId },
+        metadata: { requiredApprovers, actorSlackUserId, actorTeamsAadUserId, actorPrincipal, actorPrincipals },
       });
       await client.query("COMMIT");
       sendJson(res, 403, { error: "Approval decision requires a configured approver", requiredApprovers });
@@ -2845,7 +3307,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
         resourceType: "approval",
         resourceId: id,
         outcome: "deny",
-        metadata: { reason: "duplicate_decision", existingStatus: existingDecision.rows[0].status, actorSlackUserId },
+        metadata: { reason: "duplicate_decision", existingStatus: existingDecision.rows[0].status, actorSlackUserId, actorTeamsAadUserId, actorPrincipal },
       });
       await client.query("COMMIT");
       sendJson(res, 409, { error: "Approval decision already recorded", status: existingDecision.rows[0].status });
@@ -2875,6 +3337,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
         eventType: "approval.denied",
         resourceType: "approval",
         resourceId: id,
+        metadata: { actorSlackUserId, actorTeamsAadUserId, actorPrincipal },
       });
       await client.query("COMMIT");
       sendJson(res, 200, {
@@ -2907,7 +3370,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
         eventType: "approval.approved",
         resourceType: "approval",
         resourceId: id,
-        metadata: { approvalsReceived, minApprovals, actorSlackUserId },
+        metadata: { approvalsReceived, minApprovals, actorSlackUserId, actorTeamsAadUserId, actorPrincipal },
       });
     } else {
       result = await client.query(
@@ -2924,7 +3387,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
         eventType: "approval.approval_recorded",
         resourceType: "approval",
         resourceId: id,
-        metadata: { approvalsReceived, minApprovals, actorSlackUserId },
+        metadata: { approvalsReceived, minApprovals, actorSlackUserId, actorTeamsAadUserId, actorPrincipal },
       });
     }
     await client.query("COMMIT");

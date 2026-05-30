@@ -33,15 +33,33 @@ export function parseSecretRefId(id: string): { workspaceId: string; slackUserId
   return { workspaceId: match[1], slackUserId: match[2] ?? null };
 }
 
+const slackChannelActions = ["messages", "reactions", "pins", "memberInfo", "emojiList"] as const;
+const teamsChannelActions = ["messages", "reactions", "memberInfo"] as const;
+
 function compileSlackActions(toolPolicies: OpenClawConfigInput["toolPolicies"]) {
-  const actionGroups = ["messages", "reactions", "pins", "memberInfo", "emojiList"] as const;
   const actions: Record<string, boolean> = {};
-  for (const group of actionGroups) actions[group] = true;
+  for (const group of slackChannelActions) actions[group] = true;
   for (const policy of toolPolicies) {
     if (isScopedToolPolicy(policy)) continue;
     if (policy.tool !== "slack") continue;
     if (policy.action === "*" && policy.effect !== "allow") {
-      for (const group of actionGroups) actions[group] = false;
+      for (const group of slackChannelActions) actions[group] = false;
+    }
+    if (policy.action in actions) actions[policy.action] = policy.effect === "allow";
+  }
+  return actions;
+}
+
+function compileTeamsActions(toolPolicies: OpenClawConfigInput["toolPolicies"]) {
+  const actions: Record<string, boolean> = { memberInfo: false };
+  for (const group of teamsChannelActions) {
+    if (group !== "memberInfo") actions[group] = true;
+  }
+  for (const policy of toolPolicies) {
+    if (isScopedToolPolicy(policy)) continue;
+    if (policy.tool !== "msteams") continue;
+    if (policy.action === "*" && policy.effect !== "allow") {
+      for (const group of teamsChannelActions) actions[group] = false;
     }
     if (policy.action in actions) actions[policy.action] = policy.effect === "allow";
   }
@@ -50,11 +68,28 @@ function compileSlackActions(toolPolicies: OpenClawConfigInput["toolPolicies"]) 
 
 function compileSlackChannels(channelPolicies: OpenClawConfigInput["channelPolicies"]) {
   return Object.fromEntries(
-    channelPolicies.map((policy) => {
+    channelPolicies.filter((policy) => (policy.channelType ?? "slack") === "slack").map((policy) => {
       const denied = new Set(policy.deniedUserIds);
       return [
         policy.channelId,
         {
+          enabled: policy.enabled,
+          requireMention: policy.requireMention,
+          users: policy.allowedUserIds.filter((userId) => !denied.has(userId)),
+        },
+      ];
+    }),
+  );
+}
+
+function compileTeamsChannels(channelPolicies: OpenClawConfigInput["channelPolicies"]) {
+  return Object.fromEntries(
+    channelPolicies.filter((policy) => policy.channelType === "msteams").map((policy) => {
+      const denied = new Set(policy.deniedUserIds);
+      return [
+        policy.channelId,
+        {
+          teamId: policy.teamId,
           enabled: policy.enabled,
           requireMention: policy.requireMention,
           users: policy.allowedUserIds.filter((userId) => !denied.has(userId)),
@@ -69,7 +104,7 @@ function toolPolicyName(policy: OpenClawConfigInput["toolPolicies"][number]): st
 }
 
 function isScopedToolPolicy(policy: OpenClawConfigInput["toolPolicies"][number]): boolean {
-  return (policy.slackUserIds ?? []).length > 0 || (policy.roleNames ?? []).length > 0;
+  return (policy.slackUserIds ?? []).length > 0 || (policy.teamsAadUserIds ?? []).length > 0 || (policy.roleNames ?? []).length > 0;
 }
 
 const OPERANT_PLUGIN_TOOLS = ["operant_ping", "pipedream_list_actions", "pipedream_run_action"] as const;
@@ -77,9 +112,14 @@ const OPERANT_PLUGIN_TOOLS = ["operant_ping", "pipedream_list_actions", "pipedre
 function compileToolExposure(toolPolicies: OpenClawConfigInput["toolPolicies"]) {
   const alsoAllow = new Set<string>(OPERANT_PLUGIN_TOOLS);
   const deny = new Set<string>();
+  const slackActions = new Set<string>(slackChannelActions);
+  const teamsActions = new Set<string>(teamsChannelActions);
   for (const policy of toolPolicies) {
     if (isScopedToolPolicy(policy)) continue;
-    if (policy.tool === "slack") continue;
+    // Channel-action policies are compiled into the per-channel actions blocks
+    // (compileSlackActions / compileTeamsActions). Skip only those here.
+    if (policy.tool === "slack" && (policy.action === "*" || slackActions.has(policy.action))) continue;
+    if (policy.tool === "msteams" && (policy.action === "*" || teamsActions.has(policy.action))) continue;
     const name = toolPolicyName(policy);
     if (policy.effect === "allow") alsoAllow.add(name);
     if (policy.effect === "deny") deny.add(name);
@@ -90,18 +130,31 @@ function compileToolExposure(toolPolicies: OpenClawConfigInput["toolPolicies"]) 
   };
 }
 
-function compilePlugins() {
+function slackConfigured(input: OpenClawConfigInput): boolean {
+  return Boolean(input.slackBotTokenConfigured && input.slackAppTokenConfigured);
+}
+
+function teamsConfigured(input: OpenClawConfigInput): boolean {
+  return Boolean(input.teamsAppId && input.teamsTenantId && input.teamsAppPasswordConfigured);
+}
+
+function compilePlugins(input: OpenClawConfigInput) {
+  const allow: string[] = [];
+  const entries: Record<string, { enabled: boolean }> = {};
+  if (slackConfigured(input)) {
+    allow.push("slack");
+    entries.slack = { enabled: true };
+  }
+  if (teamsConfigured(input)) {
+    allow.push("msteams");
+    entries.msteams = { enabled: true };
+  }
+  allow.push("operant");
+  entries.operant = { enabled: true };
   return {
-    allow: ["slack", "operant"],
+    allow,
     bundledDiscovery: "compat",
-    entries: {
-      slack: {
-        enabled: true,
-      },
-      operant: {
-        enabled: true,
-      },
-    },
+    entries,
   };
 }
 
@@ -137,13 +190,93 @@ function compileSandbox(input: OpenClawConfigInput) {
 }
 
 export function generateOpenClawConfig(input: OpenClawConfigInput): Record<string, unknown> {
-  const approvers = input.approvalPolicies
-    .filter((policy) => policy.enabled)
-    .flatMap((policy) => policy.approverSlackUserIds);
-  const uniqueApprovers = Array.from(new Set(approvers));
+  const enabledApprovalPolicies = input.approvalPolicies.filter((policy) => policy.enabled);
+  const uniqueSlackApprovers = Array.from(new Set(enabledApprovalPolicies.flatMap((policy) => policy.approverSlackUserIds)));
+  const uniqueTeamsApprovers = Array.from(new Set(enabledApprovalPolicies.flatMap((policy) => policy.approverTeamsUserIds ?? [])));
   const channels = compileSlackChannels(input.channelPolicies);
+  const teamsChannels = compileTeamsChannels(input.channelPolicies);
+  const teamsDmAllowFrom = input.teamsDmAllowFrom ?? [];
   const toolExposure = compileToolExposure(input.toolPolicies);
-  const plugins = compilePlugins();
+  const plugins = compilePlugins(input);
+  const generatedChannels: Record<string, unknown> = {};
+
+  if (slackConfigured(input)) {
+    generatedChannels.slack = {
+      enabled: true,
+      mode: "socket",
+      botToken: secretRef(buildSecretRefId(input.workspaceId, "slack/botToken")),
+      appToken: secretRef(buildSecretRefId(input.workspaceId, "slack/appToken")),
+      dm: {
+        enabled: true,
+        groupEnabled: false,
+      },
+      dmPolicy: input.dmAllowFrom.length > 0 ? "allowlist" : "disabled",
+      allowFrom: input.dmAllowFrom,
+      groupPolicy: Object.keys(channels).length > 0 ? "allowlist" : "disabled",
+      channels,
+      requireMention: true,
+      replyToMode: "all",
+      ackReaction: "eyes",
+      typingReaction: "pencil2",
+      mediaMaxMb: 25,
+      thread: {
+        historyScope: "thread",
+        inheritParent: false,
+        initialHistoryLimit: 20,
+        requireExplicitMention: false,
+      },
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "thinking",
+          toolProgress: true,
+          commandText: "status",
+        },
+      },
+      actions: compileSlackActions(input.toolPolicies),
+      execApprovals: {
+        enabled: uniqueSlackApprovers.length > 0,
+        approvers: uniqueSlackApprovers,
+        target: "both",
+      },
+      capabilities: {
+        interactiveReplies: true,
+      },
+    };
+  }
+
+  if (teamsConfigured(input)) {
+    generatedChannels.msteams = {
+      enabled: true,
+      appId: input.teamsAppId,
+      appPassword: secretRef(buildSecretRefId(input.workspaceId, "msteams/appPassword")),
+      tenantId: input.teamsTenantId,
+      webhook: {
+        port: input.msteamsWebhookPort ?? 3978,
+        path: input.msteamsWebhookPath ?? "/api/messages",
+      },
+      dm: {
+        enabled: true,
+        groupEnabled: true,
+      },
+      dmPolicy: teamsDmAllowFrom.length > 0 ? "allowlist" : "disabled",
+      allowFrom: teamsDmAllowFrom,
+      groupPolicy: Object.keys(teamsChannels).length > 0 ? "allowlist" : "disabled",
+      channels: teamsChannels,
+      requireMention: true,
+      historyLimit: 0,
+      actions: compileTeamsActions(input.toolPolicies),
+      execApprovals: {
+        enabled: uniqueTeamsApprovers.length > 0,
+        approvers: uniqueTeamsApprovers,
+        target: "both",
+      },
+      capabilities: {
+        interactiveReplies: false,
+        files: false,
+      },
+    };
+  }
 
   return {
     gateway: {
@@ -210,57 +343,17 @@ export function generateOpenClawConfig(input: OpenClawConfigInput): Record<strin
       },
     },
     commands: {
-      ownerAllowFrom: uniqueApprovers.map((id) => `slack:${id}`),
+      ownerAllowFrom: [
+        ...uniqueSlackApprovers.map((id) => `slack:${id}`),
+        ...uniqueTeamsApprovers.map((id) => `msteams:${id}`),
+      ],
     },
     plugins: {
       allow: plugins.allow,
       bundledDiscovery: plugins.bundledDiscovery,
       entries: plugins.entries,
     },
-    channels: {
-      slack: {
-        enabled: true,
-        mode: "socket",
-        botToken: secretRef(buildSecretRefId(input.workspaceId, "slack/botToken")),
-        appToken: secretRef(buildSecretRefId(input.workspaceId, "slack/appToken")),
-        dm: {
-          enabled: true,
-          groupEnabled: false,
-        },
-        dmPolicy: input.dmAllowFrom.length > 0 ? "allowlist" : "disabled",
-        allowFrom: input.dmAllowFrom,
-        groupPolicy: Object.keys(channels).length > 0 ? "allowlist" : "disabled",
-        channels,
-        requireMention: true,
-        replyToMode: "all",
-        ackReaction: "eyes",
-        typingReaction: "pencil2",
-        mediaMaxMb: 25,
-        thread: {
-          historyScope: "thread",
-          inheritParent: false,
-          initialHistoryLimit: 20,
-          requireExplicitMention: false,
-        },
-        streaming: {
-          mode: "progress",
-          progress: {
-            label: "thinking",
-            toolProgress: true,
-            commandText: "status",
-          },
-        },
-        actions: compileSlackActions(input.toolPolicies),
-        execApprovals: {
-          enabled: uniqueApprovers.length > 0,
-          approvers: uniqueApprovers,
-          target: "both",
-        },
-        capabilities: {
-          interactiveReplies: true,
-        },
-      },
-    },
+    channels: generatedChannels,
     logging: {
       redactSensitive: "tools",
     },

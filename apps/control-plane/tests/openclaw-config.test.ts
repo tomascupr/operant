@@ -15,6 +15,8 @@ function baseInput(overrides: Partial<OpenClawConfigInput> = {}): OpenClawConfig
     channelPolicies: [],
     toolPolicies: [],
     approvalPolicies: [],
+    slackBotTokenConfigured: true,
+    slackAppTokenConfigured: true,
     secretResolverCommand: "/operant/openclaw/operant-secret-resolver",
     secretResolverScript: "/operant/openclaw/operant-secret-resolver.mjs",
     ...overrides,
@@ -253,4 +255,105 @@ test("buildSecretRefId encodes the slack user into the path when provided", () =
   const ref = buildSecretRefId(workspaceId, "integrations/gmail/api-token", { slackUserId: "U12345" });
   assert.equal(ref, `workspaces/${workspaceId}/users/U12345/integrations/gmail/api-token`);
   assert.match(ref, /^workspaces\/[^/]+\//);
+});
+
+test("generates mixed Slack and Teams channel config with Teams SecretRefs", () => {
+  const config = generateOpenClawConfig(baseInput({
+    teamsAppId: "11111111-1111-4111-8111-111111111111",
+    teamsAppPasswordConfigured: true,
+    teamsTenantId: "22222222-2222-4222-8222-222222222222",
+    msteamsWebhookPort: 3978,
+    msteamsWebhookPath: "/api/messages",
+    dmAllowFrom: ["U1"],
+    teamsDmAllowFrom: ["33333333-3333-4333-8333-333333333333"],
+    channelPolicies: [
+      {
+        channelType: "slack",
+        channelId: "C1",
+        enabled: true,
+        requireMention: true,
+        allowedUserIds: ["U1"],
+        deniedUserIds: [],
+      },
+      {
+        channelType: "msteams",
+        teamId: "19:team@example",
+        channelId: "19:channel@example",
+        enabled: true,
+        requireMention: true,
+        allowedUserIds: ["33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"],
+        deniedUserIds: ["44444444-4444-4444-8444-444444444444"],
+      },
+    ],
+    approvalPolicies: [
+      {
+        name: "teams-risky",
+        actionPattern: "exec:*",
+        resourcePattern: "*",
+        approverSlackUserIds: ["U1"],
+        approverTeamsUserIds: ["33333333-3333-4333-8333-333333333333"],
+        minApprovals: 1,
+        enabled: true,
+      },
+    ],
+  })) as any;
+
+  // operant plugin is always present and bundledDiscovery is preserved
+  assert.deepEqual(config.plugins.allow, ["slack", "msteams", "operant"]);
+  assert.equal(config.plugins.bundledDiscovery, "compat");
+  assert.deepEqual(config.plugins.entries.msteams, { enabled: true });
+  assert.deepEqual(config.plugins.entries.operant, { enabled: true });
+  // Slack channel config unchanged when Slack is configured
+  assert.equal(config.channels.slack.channels.C1.enabled, true);
+  assert.equal(config.channels.msteams.appId, "11111111-1111-4111-8111-111111111111");
+  assert.deepEqual(config.channels.msteams.appPassword, {
+    source: "exec",
+    provider: "operant",
+    id: `workspaces/${workspaceId}/msteams/appPassword`,
+  });
+  assert.equal(config.channels.msteams.tenantId, "22222222-2222-4222-8222-222222222222");
+  assert.deepEqual(config.channels.msteams.webhook, { port: 3978, path: "/api/messages" });
+  assert.equal(config.channels.msteams.requireMention, true);
+  assert.equal(config.channels.msteams.historyLimit, 0);
+  assert.deepEqual(config.channels.msteams.actions, { memberInfo: false, messages: true, reactions: true });
+  assert.equal(config.channels.msteams.dmPolicy, "allowlist");
+  assert.deepEqual(config.channels.msteams.allowFrom, ["33333333-3333-4333-8333-333333333333"]);
+  assert.equal(config.channels.msteams.groupPolicy, "allowlist");
+  assert.deepEqual(config.channels.msteams.channels["19:channel@example"], {
+    teamId: "19:team@example",
+    enabled: true,
+    requireMention: true,
+    users: ["33333333-3333-4333-8333-333333333333"],
+  });
+  assert.deepEqual(config.channels.msteams.execApprovals.approvers, ["33333333-3333-4333-8333-333333333333"]);
+  assert.deepEqual(config.commands.ownerAllowFrom, ["slack:U1", "msteams:33333333-3333-4333-8333-333333333333"]);
+  assert.equal(JSON.stringify(config).includes("teams-app-password"), false);
+});
+
+test("does not emit Teams channel config until the app password SecretRef exists", () => {
+  const config = generateOpenClawConfig(baseInput({
+    teamsAppId: "11111111-1111-4111-8111-111111111111",
+    teamsTenantId: "22222222-2222-4222-8222-222222222222",
+    teamsAppPasswordConfigured: false,
+  })) as any;
+
+  assert.deepEqual(config.plugins.allow, ["slack", "operant"]);
+  assert.equal(config.plugins.entries.msteams, undefined);
+  assert.equal(config.channels.msteams, undefined);
+});
+
+test("keeps the operant plugin when only Teams is configured", () => {
+  const config = generateOpenClawConfig(baseInput({
+    slackBotTokenConfigured: false,
+    slackAppTokenConfigured: false,
+    teamsAppId: "11111111-1111-4111-8111-111111111111",
+    teamsTenantId: "22222222-2222-4222-8222-222222222222",
+    teamsAppPasswordConfigured: true,
+  })) as any;
+
+  assert.deepEqual(config.plugins.allow, ["msteams", "operant"]);
+  assert.equal(config.plugins.bundledDiscovery, "compat");
+  assert.deepEqual(config.plugins.entries.operant, { enabled: true });
+  assert.equal(config.channels.slack, undefined);
+  assert.equal(config.channels.msteams.enabled, true);
 });

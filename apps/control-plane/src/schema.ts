@@ -94,7 +94,7 @@ const roleNameInputSchema = z.string()
   .regex(/^[a-z][a-z0-9_:-]*$/, "Use lowercase letters, numbers, underscores, colons, or hyphens");
 const roleNameListSchema = z.array(roleNameInputSchema).max(100);
 
-const httpUrlSchema = z.string().url().refine((value) => {
+const httpUrlSchema = z.url().refine((value) => {
   const protocol = new URL(value).protocol;
   return protocol === "http:" || protocol === "https:";
 }, "Use an http or https URL");
@@ -120,17 +120,68 @@ export const credentialInputSchema = z.object({
   slackTeamId: slackIdSchema.optional(),
   slackBotToken: credentialSecretValueSchema.optional(),
   slackAppToken: credentialSecretValueSchema.optional(),
+  teamsAppId: teamsAppIdSchema.optional(),
+  teamsAppPassword: credentialSecretValueSchema.optional(),
+  teamsTenantId: teamsTenantIdSchema.optional(),
+  msteamsWebhookPort: z.number().int().min(1).max(65535).optional(),
+  msteamsWebhookPath: z.string().min(1).max(120).regex(/^\/[A-Za-z0-9/_:.-]*$/, "Use an absolute webhook path").optional(),
   modelProvider: secretRefPartSchema.default("openai"),
   modelName: modelNameSchema.default("gpt-5"),
   modelApiKey: credentialSecretValueSchema.optional(),
   adminSlackUserId: slackIdSchema.optional(),
+  adminTeamsAadUserId: teamsAadUserIdSchema.optional(),
   allowedDmUserIds: slackIdListSchema.default([]),
   allowedChannelIds: slackIdListSchema.default([]),
+  allowedTeamsDmUserIds: teamsAadUserIdListSchema.default([]),
+  teamsChannelPolicies: z.array(z.object({
+    teamId: teamsConversationIdSchema,
+    channelId: teamsConversationIdSchema,
+    name: displayNameSchema.nullable().optional(),
+    allowedUserIds: teamsAadUserIdListSchema.default([]),
+  })).max(200).default([]),
   approvalSlackUserIds: slackIdListSchema.default([]),
+  approvalTeamsUserIds: teamsAadUserIdListSchema.default([]),
 }).superRefine((input, ctx) => {
+  if (Boolean(input.slackBotToken) !== Boolean(input.slackAppToken)) {
+    ctx.addIssue({
+      code: "custom",
+      path: input.slackBotToken ? ["slackAppToken"] : ["slackBotToken"],
+      message: "Slack setup requires both bot and app tokens",
+    });
+  }
+  const teamsValues = [input.teamsAppId, input.teamsAppPassword, input.teamsTenantId].filter(Boolean);
+  if (teamsValues.length > 0 && teamsValues.length < 3) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["teamsAppPassword"],
+      message: "Teams setup requires app ID, app password, and tenant ID",
+    });
+  }
+  if (!input.slackBotToken && !input.teamsAppPassword) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["slackBotToken"],
+      message: "Configure Slack tokens, Teams credentials, or both",
+    });
+  }
   addDuplicateSlackIdIssues(ctx, input.allowedDmUserIds, ["allowedDmUserIds"], "DM allowlist");
   addDuplicateSlackIdIssues(ctx, input.allowedChannelIds, ["allowedChannelIds"], "channel allowlist");
   addDuplicateSlackIdIssues(ctx, input.approvalSlackUserIds, ["approvalSlackUserIds"], "approval");
+  addDuplicateStringIssues(ctx, input.allowedTeamsDmUserIds, ["allowedTeamsDmUserIds"], "Teams DM allowlist");
+  addDuplicateStringIssues(ctx, input.approvalTeamsUserIds, ["approvalTeamsUserIds"], "Teams approval");
+  const teamsChannels = new Set<string>();
+  input.teamsChannelPolicies.forEach((policy, index) => {
+    const key = `${policy.teamId}\0${policy.channelId}`;
+    if (teamsChannels.has(key)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["teamsChannelPolicies", index, "channelId"],
+        message: `Duplicate Teams channel policy for ${policy.teamId}/${policy.channelId}`,
+      });
+    }
+    teamsChannels.add(key);
+    addDuplicateStringIssues(ctx, policy.allowedUserIds, ["teamsChannelPolicies", index, "allowedUserIds"], "Teams channel allowlist");
+  });
 });
 
 export type CredentialInput = z.infer<typeof credentialInputSchema>;
@@ -149,6 +200,10 @@ export const workspaceSettingsUpdateSchema = z.object({
   companyName: displayNameSchema.optional(),
   workspaceName: displayNameSchema.optional(),
   slackTeamId: slackIdSchema.nullable().optional(),
+  teamsAppId: teamsAppIdSchema.nullable().optional(),
+  teamsTenantId: teamsTenantIdSchema.nullable().optional(),
+  msteamsWebhookPort: z.number().int().min(1).max(65535).optional(),
+  msteamsWebhookPath: z.string().min(1).max(120).regex(/^\/[A-Za-z0-9/_:.-]*$/, "Use an absolute webhook path").optional(),
   openclawGatewayUrl: httpUrlSchema.optional(),
   modelProvider: secretRefPartSchema.optional(),
   modelName: modelNameSchema.optional(),
@@ -215,15 +270,63 @@ export type PolicyDecision = {
 };
 
 export const channelPolicyInputSchema = z.object({
-  channelId: slackIdSchema,
+  channelType: z.enum(chatPlatforms).default("slack"),
+  teamId: teamsConversationIdSchema.nullable().optional(),
+  channelId: chatPrincipalIdSchema,
   name: displayNameSchema.nullable().optional(),
   enabled: z.boolean().default(true),
   requireMention: z.boolean().default(true),
-  allowedUserIds: slackIdListSchema.default([]),
-  deniedUserIds: slackIdListSchema.default([]),
+  allowedUserIds: z.array(chatPrincipalIdSchema).max(200).default([]),
+  deniedUserIds: z.array(chatPrincipalIdSchema).max(200).default([]),
 }).superRefine((policy, ctx) => {
-  addDuplicateSlackIdIssues(ctx, policy.allowedUserIds, ["allowedUserIds"], "channel allowlist");
-  addDuplicateSlackIdIssues(ctx, policy.deniedUserIds, ["deniedUserIds"], "channel denylist");
+  if (policy.channelType === "slack") {
+    if (!slackIdSchema.safeParse(policy.channelId).success) {
+      ctx.addIssue({ code: "custom", path: ["channelId"], message: "Slack channel policies require a Slack channel ID" });
+    }
+    for (const [field, values, label] of [
+      ["allowedUserIds", policy.allowedUserIds, "channel allowlist"] as const,
+      ["deniedUserIds", policy.deniedUserIds, "channel denylist"] as const,
+    ]) {
+      values.forEach((value, index) => {
+        if (!slackIdSchema.safeParse(value).success) {
+          ctx.addIssue({ code: "custom", path: [field, index], message: "Use only Slack identifier characters" });
+        }
+      });
+      addDuplicateSlackIdIssues(ctx, values, [field], label);
+    }
+    return;
+  }
+  if (!policy.teamId) {
+    ctx.addIssue({ code: "custom", path: ["teamId"], message: "Teams channel policies require a teamId" });
+  }
+  if (!teamsConversationIdSchema.safeParse(policy.channelId).success) {
+    ctx.addIssue({ code: "custom", path: ["channelId"], message: "Teams channel policies require a Teams conversation or channel ID" });
+  }
+  for (const [field, values, label] of [
+    ["allowedUserIds", policy.allowedUserIds, "Teams channel allowlist"] as const,
+    ["deniedUserIds", policy.deniedUserIds, "Teams channel denylist"] as const,
+  ]) {
+    values.forEach((value, index) => {
+      if (!teamsAadUserIdSchema.safeParse(value).success) {
+        ctx.addIssue({ code: "custom", path: [field, index], message: "Use Microsoft Entra user object IDs for Teams allowlists" });
+      }
+    });
+    addDuplicateStringIssues(ctx, values, [field], label);
+  }
+});
+
+const teamsChannelPolicyAliasSchema = z.object({
+  channelType: z.literal("msteams").default("msteams"),
+  teamId: teamsConversationIdSchema,
+  channelId: teamsConversationIdSchema,
+  name: displayNameSchema.nullable().optional(),
+  enabled: z.boolean().default(true),
+  requireMention: z.boolean().default(true),
+  allowedUserIds: teamsAadUserIdListSchema.default([]),
+  deniedUserIds: teamsAadUserIdListSchema.default([]),
+}).superRefine((policy, ctx) => {
+  addDuplicateStringIssues(ctx, policy.allowedUserIds, ["allowedUserIds"], "Teams channel allowlist");
+  addDuplicateStringIssues(ctx, policy.deniedUserIds, ["deniedUserIds"], "Teams channel denylist");
 });
 
 export const toolPolicyInputSchema = z.object({
@@ -231,9 +334,11 @@ export const toolPolicyInputSchema = z.object({
   action: policyIdentifierSchema,
   effect: z.enum(["allow", "deny", "approval_required"]),
   slackUserIds: slackIdListSchema.default([]),
+  teamsAadUserIds: teamsAadUserIdListSchema.default([]),
   roleNames: roleNameListSchema.default([]),
 }).superRefine((policy, ctx) => {
   addDuplicateSlackIdIssues(ctx, policy.slackUserIds, ["slackUserIds"], "tool policy user");
+  addDuplicateStringIssues(ctx, policy.teamsAadUserIds, ["teamsAadUserIds"], "tool policy Teams user");
   addDuplicateStringIssues(ctx, policy.roleNames, ["roleNames"], "tool policy role");
 });
 
@@ -242,12 +347,17 @@ export const approvalPolicyInputSchema = z.object({
   actionPattern: policyIdentifierSchema,
   resourcePattern: policyIdentifierSchema.default("*"),
   approverSlackUserIds: slackIdListSchema.default([]),
+  approverTeamsUserIds: teamsAadUserIdListSchema.default([]),
   minApprovals: z.number().int().positive().default(1),
   enabled: z.boolean().default(true),
 }).superRefine((policy, ctx) => {
   addDuplicateSlackIdIssues(ctx, policy.approverSlackUserIds, ["approverSlackUserIds"], "approval policy approver");
+  addDuplicateStringIssues(ctx, policy.approverTeamsUserIds, ["approverTeamsUserIds"], "approval policy Teams approver");
   if (!policy.enabled) return;
-  const uniqueApprovers = new Set(policy.approverSlackUserIds);
+  const uniqueApprovers = new Set([
+    ...policy.approverSlackUserIds.map((id) => `slack:${id}`),
+    ...policy.approverTeamsUserIds.map((id) => `msteams:${id}`),
+  ]);
   if (uniqueApprovers.size === 0) {
     ctx.addIssue({
       code: "custom",
@@ -267,22 +377,28 @@ export const approvalPolicyInputSchema = z.object({
 
 export const policyUpdateSchema = z.object({
   allowedDmUserIds: slackIdListSchema.default([]),
+  allowedTeamsDmUserIds: teamsAadUserIdListSchema.default([]),
   channelPolicies: z.array(channelPolicyInputSchema).max(200).default([]),
+  teamsChannelPolicies: z.array(teamsChannelPolicyAliasSchema).max(200).default([]),
   toolPolicies: z.array(toolPolicyInputSchema).max(500).default([]),
   approvalPolicies: z.array(approvalPolicyInputSchema).max(100).default([]),
 }).superRefine((policy, ctx) => {
   addDuplicateSlackIdIssues(ctx, policy.allowedDmUserIds, ["allowedDmUserIds"], "DM allowlist");
+  addDuplicateStringIssues(ctx, policy.allowedTeamsDmUserIds, ["allowedTeamsDmUserIds"], "Teams DM allowlist");
 
   const channelIds = new Set<string>();
-  policy.channelPolicies.forEach((channelPolicy, index) => {
-    if (channelIds.has(channelPolicy.channelId)) {
+  const allChannelPolicies = [...policy.channelPolicies, ...policy.teamsChannelPolicies];
+  allChannelPolicies.forEach((channelPolicy, index) => {
+    const key = `${channelPolicy.channelType}:${channelPolicy.teamId ?? ""}:${channelPolicy.channelId}`;
+    if (channelIds.has(key)) {
+      const fromAlias = index >= policy.channelPolicies.length;
       ctx.addIssue({
         code: "custom",
-        path: ["channelPolicies", index, "channelId"],
+        path: [fromAlias ? "teamsChannelPolicies" : "channelPolicies", fromAlias ? index - policy.channelPolicies.length : index, "channelId"],
         message: `Duplicate channel policy for ${channelPolicy.channelId}`,
       });
     }
-    channelIds.add(channelPolicy.channelId);
+    channelIds.add(key);
   });
 
   const toolActions = new Set<string>();
@@ -292,6 +408,7 @@ export const policyUpdateSchema = z.object({
       toolPolicy.action,
       toolPolicy.effect,
       [...toolPolicy.slackUserIds].sort().join(","),
+      [...toolPolicy.teamsAadUserIds].sort().join(","),
       [...toolPolicy.roleNames].sort().join(","),
     ].join("\0");
     if (toolActions.has(key)) {
@@ -316,16 +433,34 @@ export const policyUpdateSchema = z.object({
     approvalNames.add(approvalPolicy.name);
 
     addDuplicateSlackIdIssues(ctx, approvalPolicy.approverSlackUserIds, ["approvalPolicies", index, "approverSlackUserIds"], "approval policy approver");
+    addDuplicateStringIssues(ctx, approvalPolicy.approverTeamsUserIds, ["approvalPolicies", index, "approverTeamsUserIds"], "approval policy Teams approver");
   });
-});
+}).transform((policy) => ({
+  allowedDmUserIds: policy.allowedDmUserIds,
+  allowedTeamsDmUserIds: policy.allowedTeamsDmUserIds,
+  channelPolicies: [...policy.channelPolicies, ...policy.teamsChannelPolicies],
+  toolPolicies: policy.toolPolicies,
+  approvalPolicies: policy.approvalPolicies,
+}));
 
 export type PolicyUpdateInput = z.infer<typeof policyUpdateSchema>;
 
 export const userUpsertSchema = z.object({
-  slackUserId: slackIdSchema,
-  email: z.string().email().nullable().optional(),
+  slackUserId: slackIdSchema.optional(),
+  teamsAadUserId: teamsAadUserIdSchema.optional(),
+  teamsBotUserId: teamsConversationIdSchema.optional(),
+  teamsTenantId: teamsTenantIdSchema.optional(),
+  email: z.email().nullable().optional(),
   name: displayNameSchema.nullable().optional(),
   roles: z.array(roleNameInputSchema).min(1).max(25).default(["member"]),
+}).superRefine((input, ctx) => {
+  if (!input.slackUserId && !input.teamsAadUserId) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["slackUserId"],
+      message: "Provide a Slack user ID, Teams AAD user ID, or both",
+    });
+  }
 });
 
 export type UserUpsertInput = z.infer<typeof userUpsertSchema>;

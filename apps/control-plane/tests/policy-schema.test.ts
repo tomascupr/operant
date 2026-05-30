@@ -81,13 +81,37 @@ test("policy update schema rejects duplicate policy identities", () => {
   );
 });
 
-test("credential schema accepts empty body so an update can keep existing secrets", () => {
-  const parsed = credentialInputSchema.parse({});
-  assert.equal(parsed.slackBotToken, undefined);
-  assert.equal(parsed.slackAppToken, undefined);
+test("credential schema requires at least one chat transport", () => {
+  assert.throws(
+    () => credentialInputSchema.parse({}),
+    /Configure Slack tokens, Teams credentials, or both/,
+  );
+  // A Slack-transport body parses and keeps the model defaults; optional model
+  // API key stays undefined so an update can preserve an existing secret.
+  const parsed = credentialInputSchema.parse({ slackBotToken: "xoxb-test", slackAppToken: "xapp-test" });
   assert.equal(parsed.modelApiKey, undefined);
   assert.equal(parsed.modelProvider, "openai");
   assert.equal(parsed.modelName, "gpt-5");
+});
+
+test("credential schema accepts Teams credentials without plaintext config leakage", () => {
+  const parsed = credentialInputSchema.parse({
+    teamsAppId: "11111111-1111-4111-8111-111111111111",
+    teamsAppPassword: "teams-app-password",
+    teamsTenantId: "22222222-2222-4222-8222-222222222222",
+    modelApiKey: "sk-testkey",
+    allowedTeamsDmUserIds: ["33333333-3333-4333-8333-333333333333"],
+    approvalTeamsUserIds: ["33333333-3333-4333-8333-333333333333"],
+  });
+  assert.equal(parsed.msteamsWebhookPort, undefined);
+  assert.equal(parsed.msteamsWebhookPath, undefined);
+  assert.throws(
+    () => credentialInputSchema.parse({
+      teamsAppId: "11111111-1111-4111-8111-111111111111",
+      modelApiKey: "sk-testkey",
+    }),
+    /Teams setup requires/,
+  );
 });
 
 test("credential and policy schemas reject duplicate Slack lists", () => {

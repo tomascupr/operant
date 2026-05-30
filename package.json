@@ -1,6 +1,6 @@
 {
   "name": "operant",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Self-hosted agents in Slack and Microsoft Teams. Per-user OAuth, per-human audit, RBAC, approvals. Control plane for OpenClaw.",
   "license": "MIT",

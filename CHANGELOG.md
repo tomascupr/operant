@@ -3,6 +3,19 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.4.0] - 2026-05-30
+
+### Added
+- governed team memory + skills store (20e0e6c)
+
+
+### Documentation
+- document governed memory + skills (v0.4.0) (942711f)
+
+
+### Fixed
+- upgrade the Operant plugin in place on reused state volumes (8d5a49b)
+
 ## [0.3.1] - 2026-05-30
 
 ### Documentation

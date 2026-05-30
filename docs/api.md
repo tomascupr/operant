@@ -35,8 +35,8 @@ same process.
 | Method | Path                 | Auth        | Purpose                                                                                       |
 | ------ | -------------------- | ----------- | --------------------------------------------------------------------------------------------- |
 | POST   | `/api/bootstrap`     | none        | First-time owner bootstrap. Accepts a one-shot setup payload.                                 |
-| POST   | `/api/auth/login`    | none        | Exchange `{slackUserId, adminLoginToken}` for a session bearer token (`operant.sessionToken`). |
-| GET    | `/api/auth/me`       | session     | Current operator: Slack user ID, workspace, roles, permissions.                               |
+| POST   | `/api/auth/login`    | none        | Exchange `{slackUserId \| teamsAadUserId, adminLoginToken}` (add `platform` when both ids are sent) for a session bearer token (`operant.sessionToken`). |
+| GET    | `/api/auth/me`       | session     | Current operator: Slack and/or Teams principal, session platform, workspace, roles, permissions. |
 | POST   | `/api/auth/logout`   | session     | Revoke the calling session.                                                                   |
 
 ## Workspace settings & summary
@@ -55,7 +55,7 @@ write. Reads return only existence metadata.
 
 | Method | Path                              | Auth    | Purpose                                                                                     |
 | ------ | --------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| POST   | `/api/config/credentials`         | session | Save Slack bot/app/user tokens, admin login token, model API key, OpenClaw gateway token.   |
+| POST   | `/api/config/credentials`         | session | Save Slack bot/app/user tokens and/or Microsoft Teams app id/password/tenant + webhook, admin login token, model API key, OpenClaw gateway token. Bootstrap needs an `adminSlackUserId` or `adminTeamsAadUserId` and Slack tokens or a Teams app password. |
 | GET    | `/api/integrations/credentials`   | session | List per-tool credential metadata (kind, key, scope, last-resolved-at) for the dashboard.   |
 | POST   | `/api/integrations/credentials`   | session | Upsert a per-workspace or per-Slack-user tool credential (e.g. `github/api-token`).         |
 
@@ -103,7 +103,7 @@ approvals. Explicit `deny` beats `approval_required` beats `allow`.
 | GET    | `/api/policy`            | session | Effective policy snapshot.                                       |
 | PUT    | `/api/policy`            | session | Replace the policy (channels, tools, approvals, DM allowlist).   |
 | POST   | `/api/policies`          | session | Alias of `PUT /api/policy`.                                      |
-| POST   | `/api/policy/evaluate`   | session | Dry-run a `{tool, action, slackUserId, channelId}` decision.     |
+| POST   | `/api/policy/evaluate`   | session | Dry-run a decision. Slack: `{tool, action, slackUserId, channelId}`; Teams: `{channelType:"msteams", tool, action, teamsAadUserId, teamId, teamsChannelId}`. |
 
 ## RBAC
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Operant is a self-hostable, MIT-licensed control plane for agents in Slack. It wraps OpenClaw, which owns Slack ingress/egress (Socket Mode) and the agent runtime; Operant adds: encrypted BYOK credential storage, RBAC + custom roles, channel/tool/approval policy, audit/usage/cost tracking, retention export/wipe, an admin dashboard, and a generated `openclaw.json` that points OpenClaw at Operant secrets through SecretRefs (no plaintext on disk).
+Operant is a self-hostable, MIT-licensed control plane for agents in Slack and Microsoft Teams. It wraps OpenClaw, which owns chat ingress/egress (Slack Socket Mode; Teams via an inbound Azure Bot webhook to OpenClaw's `msteams` channel) and the agent runtime; Operant adds: encrypted BYOK credential storage, RBAC + custom roles, dual-identity (Slack + Teams) channel/tool/approval policy, audit/usage/cost tracking, retention export/wipe, an admin dashboard, and a generated `openclaw.json` that points OpenClaw at Operant secrets through SecretRefs (no plaintext on disk). Slack and Teams are dual-identity: a user can carry a Slack id, a Teams AAD id, or both, and policy/audit/approvals key on the active platform's principal.
 
 The README is the project-facing overview. Operational setup lives in `docs/setup.md`; Slack scopes/events and live acceptance details live in `deploy/slack/README.md`. When in doubt about Slack/live-acceptance flow, scopes, manual vs. token mode, sandbox overlay, or env aliases, read those docs before improvising.
 

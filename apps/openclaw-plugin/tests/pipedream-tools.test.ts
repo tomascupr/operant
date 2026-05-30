@@ -29,6 +29,9 @@ function stubOperantClient(decide: (toolName: string) => PolicyEffect): OperantC
       connectLinkUrl: `https://pipedream.com/_static/connect.html?token=ctok_demo${input.appSlug ? `&app=${input.appSlug}` : ""}`,
     }),
     listPipedreamAccounts: async () => ({ accounts: [] }),
+    writeMemory: async () => ({ id: "mem_1", createdAt: "2026-05-31T00:00:00Z" }),
+    searchMemory: async () => ({ entries: [] }),
+    searchSkills: async () => ({ skills: [] }),
   };
 }
 

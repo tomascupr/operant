@@ -28,6 +28,8 @@ const appState = {
   pipedreamAccounts: [],
   selectedPipedreamApp: null,
   pipedreamActions: [],
+  memory: [],
+  skills: [],
 };
 
 let activePolicyFilterTool = null;
@@ -257,6 +259,8 @@ function renderSignedOut() {
   $("users-result").replaceChildren(emptyState("Sign in required", "Users are hidden until sign-in."));
   $("roles-result").replaceChildren(emptyState("Sign in required", "Roles are hidden until sign-in."));
   $("integration-credentials-result").replaceChildren(emptyState("Sign in required", "Credential metadata is hidden until sign-in."));
+  $("memory-result").replaceChildren(emptyState("Sign in required", "Memory is hidden until sign-in."));
+  $("skills-result").replaceChildren(emptyState("Sign in required", "Skills are hidden until sign-in."));
   $("pipedream-diagnostics").textContent = "Sign in to view Pipedream diagnostics.";
   $("pipedream-apps-grid").textContent = "Sign in to manage Pipedream policies.";
   $("pipedream-marketplace-grid").replaceChildren(emptyState("Sign in required", "Pipedream apps are hidden until sign-in."));
@@ -953,6 +957,71 @@ function closeConfirm(value) {
   confirmResolve = null;
 }
 
+function renderMemoryEntries(items) {
+  renderTable($("memory-result"), [
+    { label: "Content", render: (row) => el("span", { title: row.content, textContent: row.content.length > 140 ? `${row.content.slice(0, 140)}…` : row.content }) },
+    { label: "Visibility", render: (row) => statusPill(row.visibility, row.visibility === "team" ? "ok" : "pending") },
+    { label: "Scope", render: (row) => text(row.scope_key) },
+    { label: "Tags", render: (row) => el("span", { textContent: (row.tags ?? []).join(", ") || "—" }) },
+    { label: "Created", render: (row) => formatDate(row.created_at) },
+    { label: "", render: (row) => {
+      const button = el("button", { type: "button", className: "ghost-button", textContent: "Delete" });
+      button.addEventListener("click", () => deleteMemoryEntry(row.id));
+      return button;
+    } },
+  ], items, "No memory entries", "Store team or private context below, or let the agent remember as it works.");
+}
+
+async function loadMemory(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("q", params.q);
+  if (params.visibility) qs.set("visibility", params.visibility);
+  const data = await request(`/api/memory${qs.toString() ? `?${qs}` : ""}`);
+  appState.memory = data.items ?? [];
+  renderMemoryEntries(appState.memory);
+}
+
+async function deleteMemoryEntry(id) {
+  try {
+    await request(`/api/memory/${id}`, { method: "DELETE" });
+    toast("Memory entry deleted.");
+    await loadMemory();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function renderSkills(items) {
+  renderTable($("skills-result"), [
+    { label: "Name", key: "name" },
+    { label: "When to use", render: (row) => el("span", { title: row.trigger_hint, textContent: row.trigger_hint.length > 100 ? `${row.trigger_hint.slice(0, 100)}…` : row.trigger_hint }) },
+    { label: "Tags", render: (row) => el("span", { textContent: (row.tags ?? []).join(", ") || "—" }) },
+    { label: "", render: (row) => {
+      const button = el("button", { type: "button", className: "ghost-button", textContent: "Delete" });
+      button.addEventListener("click", () => deleteSkill(row.id));
+      return button;
+    } },
+  ], items, "No skills defined", "Admins can create reusable named procedures the agent can follow.");
+}
+
+async function loadSkills(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("q", params.q);
+  const data = await request(`/api/skills${qs.toString() ? `?${qs}` : ""}`);
+  appState.skills = data.items ?? [];
+  renderSkills(appState.skills);
+}
+
+async function deleteSkill(id) {
+  try {
+    await request(`/api/skills/${id}`, { method: "DELETE" });
+    toast("Skill deleted.");
+    await loadSkills();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 async function loadSummary() {
   const savedPrincipalId = savedLoginPrincipalId();
   const savedPlatform = savedLoginPlatform();
@@ -1123,6 +1192,18 @@ async function loadSummary() {
   } catch {
     appState.credentials = [];
     $("integration-credentials-result").replaceChildren(emptyState("Sign in required", "Credential metadata is hidden until sign-in."));
+  }
+
+  try {
+    await loadMemory();
+  } catch {
+    $("memory-result").replaceChildren(emptyState("Sign in required", "Memory is hidden until sign-in."));
+  }
+
+  try {
+    await loadSkills();
+  } catch {
+    $("skills-result").replaceChildren(emptyState("Sign in required", "Skills are hidden until sign-in."));
   }
 
   renderSetupChecklist();
@@ -1401,6 +1482,72 @@ $("integration-credential-form").addEventListener("submit", async (event) => {
   } catch (error) {
     toast(error.message);
   }
+});
+
+$("memory-search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await loadMemory({ q: String(form.get("q") || "").trim(), visibility: String(form.get("visibility") || "").trim() });
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+$("memory-write-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const writeForm = event.currentTarget;
+  const form = new FormData(writeForm);
+  const payload = {
+    content: String(form.get("content") || ""),
+    visibility: String(form.get("visibility") || "private"),
+  };
+  const scopeKey = String(form.get("scopeKey") || "").trim();
+  if (scopeKey) payload.scopeKey = scopeKey;
+  const tags = splitIds(form.get("tags"));
+  if (tags.length) payload.tags = tags;
+  try {
+    await request("/api/memory", { method: "POST", body: JSON.stringify(payload) });
+    writeForm.reset();
+    toast("Memory saved.");
+    await loadMemory();
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+$("skill-search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await loadSkills({ q: String(form.get("q") || "").trim() });
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+$("skill-write-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const writeForm = event.currentTarget;
+  const form = new FormData(writeForm);
+  const payload = {
+    name: String(form.get("name") || ""),
+    triggerHint: String(form.get("triggerHint") || ""),
+    body: String(form.get("body") || ""),
+  };
+  const tags = splitIds(form.get("tags"));
+  if (tags.length) payload.tags = tags;
+  try {
+    const result = await request("/api/skills", { method: "POST", body: JSON.stringify(payload) });
+    toast(`Skill saved: ${result.name}`);
+    await loadSkills();
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+$("refresh-knowledge").addEventListener("click", () => {
+  Promise.all([loadMemory(), loadSkills()]).catch((error) => toast(error.message));
 });
 
 $("generate-config").addEventListener("click", async () => {

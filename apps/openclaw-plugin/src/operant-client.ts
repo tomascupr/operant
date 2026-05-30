@@ -43,12 +43,48 @@ export interface PipedreamConnectTokenResult {
   connectLinkUrl: string;
 }
 
+export interface MemoryEntry {
+  id: string;
+  content: string;
+  visibility: "private" | "team";
+  scope_key: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillEntry {
+  id: string;
+  name: string;
+  trigger_hint: string;
+  body: string;
+  tags: string[];
+}
+
+export interface MemoryWriteInput {
+  principalId: string;
+  content: string;
+  visibility?: "private" | "team";
+  scopeKey?: string;
+  tags?: string[];
+}
+
+export interface MemorySearchInput {
+  principalId: string;
+  q?: string;
+  tags?: string[];
+  limit?: number;
+}
+
 export interface OperantClient {
   getUserContext(sessionKey: string): Promise<PluginUserContext>;
   checkPolicy(input: PolicyCheckInput): Promise<PolicyDecision>;
   searchPipedreamApps(input: { q?: string; limit?: number }): Promise<{ apps: PipedreamAppSummary[]; pageInfo?: Record<string, unknown> | null }>;
   createPipedreamConnectToken(input: { principalId: string; appSlug?: string }): Promise<PipedreamConnectTokenResult>;
   listPipedreamAccounts(input: { principalId: string; app?: string }): Promise<{ accounts: PipedreamAccountSummary[] }>;
+  writeMemory(input: MemoryWriteInput): Promise<{ id: string; createdAt: string }>;
+  searchMemory(input: MemorySearchInput): Promise<{ entries: MemoryEntry[] }>;
+  searchSkills(input: MemorySearchInput): Promise<{ skills: SkillEntry[] }>;
 }
 
 export interface OperantClientOptions {
@@ -99,6 +135,15 @@ export function createOperantClient({ baseUrl, token, fetchImpl = fetch }: Opera
     },
     listPipedreamAccounts(input) {
       return post<{ accounts: PipedreamAccountSummary[] }>("/internal/plugin/pipedream/accounts", input);
+    },
+    writeMemory(input) {
+      return post<{ id: string; createdAt: string }>("/internal/plugin/memory/write", input);
+    },
+    searchMemory(input) {
+      return post<{ entries: MemoryEntry[] }>("/internal/plugin/memory/search", input);
+    },
+    searchSkills(input) {
+      return post<{ skills: SkillEntry[] }>("/internal/plugin/skills/search", input);
     },
   };
 }

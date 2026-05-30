@@ -1,6 +1,7 @@
 import { definePluginEntry, jsonResult } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import { createOperantClient, type OperantClient } from "./operant-client.js";
+import { createMemorySearchTool, createMemoryWriteTool, createSkillsSearchTool } from "./memory/tools.js";
 import { createPipedreamClient, type PipedreamClient } from "./pipedream/client.js";
 import {
   createPipedreamConnectAppTool,
@@ -77,6 +78,17 @@ export default definePluginEntry({
       return;
     }
     const operantClient = createOperantClient({ baseUrl: env.operantBaseUrl, token: env.operantInternalToken });
+
+    // Memory and skills tools only need the Operant base env, so register them before
+    // the Pipedream wiring check (which may short-circuit the rest of registration).
+    const memoryDeps = (ctx: { requesterSenderId?: string }) => ({
+      operantClient,
+      principalId: ctx.requesterSenderId ?? null,
+    });
+    api.registerTool((ctx) => createMemoryWriteTool(memoryDeps(ctx)));
+    api.registerTool((ctx) => createMemorySearchTool(memoryDeps(ctx)));
+    api.registerTool((ctx) => createSkillsSearchTool(memoryDeps(ctx)));
+
     const pipedream = buildPipedreamWiring(env);
     if (!pipedream) {
       console.warn(

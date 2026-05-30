@@ -107,7 +107,14 @@ function isScopedToolPolicy(policy: OpenClawConfigInput["toolPolicies"][number])
   return (policy.slackUserIds ?? []).length > 0 || (policy.teamsAadUserIds ?? []).length > 0 || (policy.roleNames ?? []).length > 0;
 }
 
-const OPERANT_PLUGIN_TOOLS = ["operant_ping", "pipedream_list_actions", "pipedream_run_action"] as const;
+const OPERANT_PLUGIN_TOOLS = [
+  "operant_ping",
+  "operant_memory_write",
+  "operant_memory_search",
+  "operant_skills_search",
+  "pipedream_list_actions",
+  "pipedream_run_action",
+] as const;
 
 function compileToolExposure(toolPolicies: OpenClawConfigInput["toolPolicies"]) {
   const alsoAllow = new Set<string>(OPERANT_PLUGIN_TOOLS);

@@ -182,7 +182,7 @@ test("generates Slack Socket Mode config with SecretRefs, policy, and safe gatew
   assert.equal(config.channels.slack.execApprovals.enabled, true);
   assert.deepEqual(config.channels.slack.execApprovals.approvers, ["U1", "U3"]);
   assert.equal(config.channels.slack.execApprovals.target, "both");
-  assert.deepEqual(config.tools.alsoAllow, ["browser", "operant_ping", "pipedream_list_actions", "pipedream_run_action"]);
+  assert.deepEqual(config.tools.alsoAllow, ["browser", "operant_memory_search", "operant_memory_write", "operant_ping", "operant_skills_search", "pipedream_list_actions", "pipedream_run_action"]);
   assert.deepEqual(config.tools.deny, ["filesystem:write"]);
   assert.equal(JSON.stringify(config.tools).includes("gh"), false);
   assert.equal(JSON.stringify(config.tools).includes("exec:shell"), false);

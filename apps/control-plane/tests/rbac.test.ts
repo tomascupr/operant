@@ -31,3 +31,18 @@ test("admin can manage users", () => {
   assert.equal(hasPermission(["admin"], { action: "users:read", resource: "user" }), true);
   assert.equal(hasPermission(["admin"], { action: "users:write", resource: "user" }), true);
 });
+
+test("memory and skills grants follow the governance boundary", () => {
+  // Members can write their own memory and read skills, but skill authoring is admin-only governance.
+  assert.equal(hasPermission(["member"], { action: "memory:write", resource: "memory" }), true);
+  assert.equal(hasPermission(["member"], { action: "skills:read", resource: "skill" }), true);
+  assert.equal(hasPermission(["member"], { action: "skills:write", resource: "skill" }), false);
+  // Admin and owner can author skills.
+  assert.equal(hasPermission(["admin"], { action: "skills:write", resource: "skill" }), true);
+  assert.equal(hasPermission(["owner"], { action: "skills:write", resource: "skill" }), true);
+  // Viewer and integration_admin are read-only over the knowledge layer.
+  assert.equal(hasPermission(["viewer"], { action: "memory:read", resource: "memory" }), true);
+  assert.equal(hasPermission(["viewer"], { action: "memory:write", resource: "memory" }), false);
+  assert.equal(hasPermission(["integration_admin"], { action: "skills:read", resource: "skill" }), true);
+  assert.equal(hasPermission(["integration_admin"], { action: "skills:write", resource: "skill" }), false);
+});

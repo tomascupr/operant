@@ -226,6 +226,104 @@ export const pluginPolicyCheckRequestSchema = z.object({
 
 export type PluginPolicyCheckRequest = z.infer<typeof pluginPolicyCheckRequestSchema>;
 
+// --- Governed memory + skills (migration 013) ---
+
+export const memoryVisibilitySchema = z.enum(["private", "team"]);
+export type MemoryVisibility = z.infer<typeof memoryVisibilitySchema>;
+
+const memoryScopeKeySchema = z.string().trim().min(1).max(120)
+  .regex(/^[A-Za-z0-9 _.:/-]+$/, "Use only letters, numbers, spaces, or _ . : / -");
+const memoryTagSchema = z.string().trim().min(1).max(60)
+  .regex(/^[A-Za-z0-9_.:/-]+$/, "Use only letters, numbers, or _ . : / -");
+const memoryTagsSchema = z.array(memoryTagSchema).max(20).default([]);
+const memoryContentSchema = z.string().trim().min(1).max(32_768);
+const memorySearchQuerySchema = z.string().trim().min(1).max(200);
+const memorySearchLimitSchema = z.number().int().min(1).max(50).default(20);
+
+export const skillNameSchema = z.string().trim().min(1).max(120)
+  .regex(/^[A-Za-z0-9 _.:/-]+$/, "Use only letters, numbers, spaces, or _ . : / -");
+const skillTriggerSchema = z.string().trim().min(1).max(1024);
+const skillBodySchema = z.string().trim().min(1).max(65_536);
+
+export const memoryEntryWriteSchema = z.object({
+  visibility: memoryVisibilitySchema.default("private"),
+  scopeKey: memoryScopeKeySchema.optional(),
+  tags: memoryTagsSchema,
+  content: memoryContentSchema,
+});
+export type MemoryEntryWriteInput = z.infer<typeof memoryEntryWriteSchema>;
+
+export const memorySearchSchema = z.object({
+  q: memorySearchQuerySchema.optional(),
+  visibility: memoryVisibilitySchema.optional(),
+  scopeKey: memoryScopeKeySchema.optional(),
+  tags: z.array(memoryTagSchema).max(10).default([]),
+  limit: memorySearchLimitSchema,
+});
+export type MemorySearchInput = z.infer<typeof memorySearchSchema>;
+
+export const skillWriteSchema = z.object({
+  name: skillNameSchema,
+  triggerHint: skillTriggerSchema,
+  body: skillBodySchema,
+  tags: memoryTagsSchema,
+});
+export type SkillWriteInput = z.infer<typeof skillWriteSchema>;
+
+export const skillSearchSchema = z.object({
+  q: memorySearchQuerySchema.optional(),
+  tags: z.array(memoryTagSchema).max(10).default([]),
+  limit: memorySearchLimitSchema,
+});
+export type SkillSearchInput = z.infer<typeof skillSearchSchema>;
+
+export const pluginMemoryWriteSchema = z.object({
+  principalId: chatPrincipalIdSchema,
+  visibility: memoryVisibilitySchema.default("private"),
+  scopeKey: memoryScopeKeySchema.optional(),
+  tags: memoryTagsSchema,
+  content: memoryContentSchema,
+});
+export type PluginMemoryWriteInput = z.infer<typeof pluginMemoryWriteSchema>;
+
+export const pluginMemorySearchSchema = z.object({
+  principalId: chatPrincipalIdSchema,
+  q: memorySearchQuerySchema.optional(),
+  tags: z.array(memoryTagSchema).max(10).default([]),
+  limit: memorySearchLimitSchema,
+});
+export type PluginMemorySearchInput = z.infer<typeof pluginMemorySearchSchema>;
+
+export const pluginSkillSearchSchema = z.object({
+  principalId: chatPrincipalIdSchema,
+  q: memorySearchQuerySchema.optional(),
+  tags: z.array(memoryTagSchema).max(10).default([]),
+  limit: memorySearchLimitSchema,
+});
+export type PluginSkillSearchInput = z.infer<typeof pluginSkillSearchSchema>;
+
+export type MemoryEntryRecord = {
+  id: string;
+  ownerPrincipalId: string;
+  ownerPlatform: ChatPlatform;
+  visibility: MemoryVisibility;
+  scopeKey: string | null;
+  tags: string[];
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SkillRecord = {
+  id: string;
+  name: string;
+  triggerHint: string;
+  body: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export const policyEvaluationSchema = z.object({
   channelType: z.enum(chatPlatforms).default("slack"),
   slackUserId: slackIdSchema.optional(),

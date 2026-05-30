@@ -8,6 +8,9 @@
   "contracts": {
     "tools": [
       "operant_ping",
+      "operant_memory_write",
+      "operant_memory_search",
+      "operant_skills_search",
       "pipedream_list_actions",
       "pipedream_run_action"
     ]

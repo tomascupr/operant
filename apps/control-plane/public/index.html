@@ -37,6 +37,7 @@
           <button type="button" class="nav-tab" data-view-target="usage-view">Usage</button>
           <button type="button" class="nav-tab" data-view-target="data-view">Data</button>
           <button type="button" class="nav-tab" data-view-target="openclaw-view">OpenClaw</button>
+          <button type="button" class="nav-tab" data-view-target="knowledge-view">Knowledge</button>
         </nav>
       </aside>
 
@@ -583,6 +584,78 @@
               <button class="openclaw-check" data-check="channels-status" type="button">Slack Probe</button>
             </div>
             <div id="openclaw-result" class="result-surface"></div>
+          </section>
+        </section>
+
+        <section id="knowledge-view" class="view" aria-labelledby="knowledge-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="knowledge-title">Knowledge</h2>
+              <p>Governed team memory and reusable skills. Entries are redacted on write, RBAC-gated, and audit-attested.</p>
+            </div>
+            <div class="actions">
+              <button id="refresh-knowledge" type="button" class="secondary-button">Refresh</button>
+            </div>
+          </div>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Memory</h3>
+                <p>Team entries are shared workspace-wide; private entries stay with their owner.</p>
+              </div>
+            </div>
+            <form id="memory-search-form" class="inline-form compact-form">
+              <label>Search<input name="q" placeholder="keywords" /></label>
+              <label>Visibility
+                <select name="visibility">
+                  <option value="">All</option>
+                  <option value="team">Team</option>
+                  <option value="private">Private</option>
+                </select>
+              </label>
+              <button type="submit">Search</button>
+            </form>
+            <div id="memory-result" class="table-surface">Sign in to view memory.</div>
+            <form id="memory-write-form" class="form-grid">
+              <label class="wide-field">Content<textarea name="content" placeholder="A fact, preference, or decision to remember" required></textarea></label>
+              <label>Visibility
+                <select name="visibility">
+                  <option value="private" selected>Private</option>
+                  <option value="team">Team</option>
+                </select>
+              </label>
+              <label>Scope key<input name="scopeKey" placeholder="project-alpha" /></label>
+              <label>Tags<input name="tags" placeholder="ops, config" /></label>
+              <div class="form-actions">
+                <button type="submit">Save Memory</button>
+              </div>
+            </form>
+            <div id="memory-write-result" class="result-surface" role="status"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Skills</h3>
+                <p>Approved, named procedures the agent can retrieve and follow. Authoring is admin-only.</p>
+              </div>
+            </div>
+            <form id="skill-search-form" class="inline-form compact-form">
+              <label>Search<input name="q" placeholder="keywords" /></label>
+              <button type="submit">Search</button>
+            </form>
+            <div id="skills-result" class="table-surface">Sign in to view skills.</div>
+            <form id="skill-write-form" class="form-grid">
+              <label>Name<input name="name" placeholder="draft-release-notes" required /></label>
+              <label class="wide-field">When to use<input name="triggerHint" placeholder="When asked to draft release notes" required /></label>
+              <label class="wide-field">Body<textarea name="body" placeholder="Step 1: ..." required></textarea></label>
+              <label>Tags<input name="tags" placeholder="release, comms" /></label>
+              <div class="form-actions">
+                <button type="submit">Save Skill</button>
+              </div>
+            </form>
+            <div id="skill-write-result" class="result-surface" role="status"></div>
           </section>
         </section>
       </main>

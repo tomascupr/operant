@@ -31,9 +31,16 @@ import {
   credentialInputSchema,
   customRoleUpsertSchema,
   integrationCredentialInputSchema,
+  memoryEntryWriteSchema,
+  memorySearchSchema,
   metadataRecordSchema,
+  pluginMemorySearchSchema,
+  pluginMemoryWriteSchema,
   pluginPolicyCheckRequestSchema,
+  pluginSkillSearchSchema,
   pluginUserContextRequestSchema,
+  skillSearchSchema,
+  skillWriteSchema,
   policyIdentifierSchema,
   policyUpdateSchema,
   policyEvaluationSchema,
@@ -47,6 +54,7 @@ import {
   type ApprovalPolicyRecord,
   type ChannelPolicyRecord,
   type ChatPlatform,
+  type MemoryVisibility,
   type ToolPolicyRecord,
 } from "./schema.js";
 import { ensureDefaultWorkspace } from "./seed.js";
@@ -3137,6 +3145,352 @@ async function handleUsageSummary(context: RouteContext): Promise<void> {
   });
 }
 
+// --- Governed memory + skills (migration 013) ---
+
+function parseCsvParam(value: string | null): string[] {
+  if (!value) return [];
+  return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+type MemoryQueryOptions = {
+  q?: string;
+  visibility?: MemoryVisibility;
+  scopeKey?: string;
+  tags: string[];
+  limit: number;
+  // When set, restrict to team entries plus private entries owned by this principal.
+  // When null, no visibility restriction (workspace-wide; owner/admin dashboard only).
+  principalScope: { slackUserId: string | null; teamsAadUserId: string | null } | null;
+};
+
+async function queryMemoryEntries(pool: Queryable, workspaceId: string, opts: MemoryQueryOptions) {
+  const params: unknown[] = [workspaceId];
+  const where: string[] = ["workspace_id = $1"];
+  if (opts.principalScope) {
+    params.push(opts.principalScope.slackUserId);
+    const slackIdx = params.length;
+    params.push(opts.principalScope.teamsAadUserId);
+    const teamsIdx = params.length;
+    where.push(
+      `(visibility = 'team' OR (visibility = 'private' AND (`
+        + `($${slackIdx}::text IS NOT NULL AND owner_platform = 'slack' AND owner_principal_id = $${slackIdx})`
+        + ` OR ($${teamsIdx}::text IS NOT NULL AND owner_platform = 'msteams' AND owner_principal_id = $${teamsIdx})`
+        + `)))`,
+    );
+  }
+  if (opts.visibility) {
+    params.push(opts.visibility);
+    where.push(`visibility = $${params.length}`);
+  }
+  if (opts.scopeKey) {
+    params.push(opts.scopeKey);
+    where.push(`scope_key = $${params.length}`);
+  }
+  if (opts.tags.length > 0) {
+    params.push(opts.tags);
+    where.push(`tags @> $${params.length}::text[]`);
+  }
+  let orderBy = "updated_at DESC";
+  if (opts.q) {
+    params.push(opts.q);
+    const qIdx = params.length;
+    where.push(`search_vector @@ plainto_tsquery('english', $${qIdx})`);
+    orderBy = `ts_rank(search_vector, plainto_tsquery('english', $${qIdx})) DESC, updated_at DESC`;
+  }
+  params.push(opts.limit);
+  const limitIdx = params.length;
+  const result = await pool.query(
+    `SELECT id, owner_principal_id, owner_platform, visibility, scope_key, tags, content, created_at, updated_at
+     FROM memory_entries
+     WHERE ${where.join(" AND ")}
+     ORDER BY ${orderBy}
+     LIMIT $${limitIdx}`,
+    params,
+  );
+  return result.rows;
+}
+
+async function querySkills(pool: Queryable, workspaceId: string, opts: { q?: string; tags: string[]; limit: number }) {
+  const params: unknown[] = [workspaceId];
+  const where: string[] = ["workspace_id = $1"];
+  if (opts.tags.length > 0) {
+    params.push(opts.tags);
+    where.push(`tags @> $${params.length}::text[]`);
+  }
+  let orderBy = "updated_at DESC";
+  if (opts.q) {
+    params.push(opts.q);
+    const qIdx = params.length;
+    where.push(`search_vector @@ plainto_tsquery('english', $${qIdx})`);
+    orderBy = `ts_rank(search_vector, plainto_tsquery('english', $${qIdx})) DESC, updated_at DESC`;
+  }
+  params.push(opts.limit);
+  const limitIdx = params.length;
+  const result = await pool.query(
+    `SELECT id, name, trigger_hint, body, tags, created_at, updated_at
+     FROM skill_definitions
+     WHERE ${where.join(" AND ")}
+     ORDER BY ${orderBy}
+     LIMIT $${limitIdx}`,
+    params,
+  );
+  return result.rows;
+}
+
+// Owners/admins browse all entries on the dashboard; everyone else (and every agent
+// request) is restricted to team entries plus their own private entries.
+function memoryPrincipalScope(actor: Authorized): { slackUserId: string | null; teamsAadUserId: string | null } | null {
+  if (actor.roles.includes("owner") || actor.roles.includes("admin")) return null;
+  return { slackUserId: actor.actorSlackUserId, teamsAadUserId: actor.actorTeamsAadUserId };
+}
+
+async function handleListMemory(context: RouteContext): Promise<void> {
+  const { res, url, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "memory:read", resource: "memory" });
+  if (!allowed.ok) return;
+  const search = memorySearchSchema.parse({
+    q: url.searchParams.get("q") ?? undefined,
+    visibility: url.searchParams.get("visibility") ?? undefined,
+    scopeKey: url.searchParams.get("scopeKey") ?? undefined,
+    tags: parseCsvParam(url.searchParams.get("tags")),
+    limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+  });
+  const rows = await queryMemoryEntries(state.pool, workspace.id, { ...search, principalScope: memoryPrincipalScope(allowed) });
+  sendJson(res, 200, { items: rows });
+}
+
+async function handleWriteMemory(context: RouteContext): Promise<void> {
+  const { req, res, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "memory:write", resource: "memory" });
+  if (!allowed.ok) return;
+  if (!allowed.actorPrincipalId || !allowed.actorChatPlatform) {
+    sendJson(res, 400, { error: "missing_principal_context" });
+    return;
+  }
+  const input = memoryEntryWriteSchema.parse(await readJson(req));
+  const content = redactRecordForPersistence({ content: input.content }).content as string;
+  const inserted = await state.pool.query(
+    `INSERT INTO memory_entries (workspace_id, owner_principal_id, owner_platform, visibility, scope_key, tags, content)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, created_at`,
+    [workspace.id, allowed.actorPrincipalId, allowed.actorChatPlatform, input.visibility, input.scopeKey ?? null, input.tags, content],
+  );
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "memory.written",
+    resourceType: "memory",
+    resourceId: inserted.rows[0].id,
+    metadata: { visibility: input.visibility, scopeKey: input.scopeKey ?? null, source: "dashboard" },
+  });
+  sendJson(res, 201, { id: inserted.rows[0].id, createdAt: inserted.rows[0].created_at });
+}
+
+async function handleDeleteMemory(context: RouteContext): Promise<void> {
+  const { res, url, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "memory:write", resource: "memory" });
+  if (!allowed.ok) return;
+  const idResult = z.uuid().safeParse(url.pathname.split("/")[3]);
+  if (!idResult.success) {
+    sendJson(res, 400, { error: "Invalid memory id" });
+    return;
+  }
+  const id = idResult.data;
+  const wide = allowed.roles.includes("owner") || allowed.roles.includes("admin");
+  const result = wide
+    ? await state.pool.query(`DELETE FROM memory_entries WHERE id = $1 AND workspace_id = $2 RETURNING id`, [id, workspace.id])
+    : await state.pool.query(
+        `DELETE FROM memory_entries
+         WHERE id = $1 AND workspace_id = $2
+           AND ( ($3::text IS NOT NULL AND owner_platform = 'slack' AND owner_principal_id = $3)
+              OR ($4::text IS NOT NULL AND owner_platform = 'msteams' AND owner_principal_id = $4) )
+         RETURNING id`,
+        [id, workspace.id, allowed.actorSlackUserId, allowed.actorTeamsAadUserId],
+      );
+  if (!result.rowCount) {
+    sendJson(res, 404, { error: "Memory entry not found" });
+    return;
+  }
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "memory.deleted",
+    resourceType: "memory",
+    resourceId: id,
+  });
+  sendJson(res, 200, { id });
+}
+
+async function handleListSkills(context: RouteContext): Promise<void> {
+  const { res, url, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "skills:read", resource: "skill" });
+  if (!allowed.ok) return;
+  const search = skillSearchSchema.parse({
+    q: url.searchParams.get("q") ?? undefined,
+    tags: parseCsvParam(url.searchParams.get("tags")),
+    limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+  });
+  const rows = await querySkills(state.pool, workspace.id, search);
+  sendJson(res, 200, { items: rows });
+}
+
+async function handleUpsertSkill(context: RouteContext): Promise<void> {
+  const { req, res, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "skills:write", resource: "skill" });
+  if (!allowed.ok) return;
+  if (!allowed.actorPrincipalId || !allowed.actorChatPlatform) {
+    sendJson(res, 400, { error: "missing_principal_context" });
+    return;
+  }
+  const input = skillWriteSchema.parse(await readJson(req));
+  const safe = redactRecordForPersistence({ body: input.body, triggerHint: input.triggerHint });
+  const result = await state.pool.query(
+    `INSERT INTO skill_definitions (workspace_id, name, trigger_hint, body, owner_principal_id, owner_platform, tags)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (workspace_id, name)
+     DO UPDATE SET trigger_hint = EXCLUDED.trigger_hint, body = EXCLUDED.body, tags = EXCLUDED.tags, updated_at = now()
+     RETURNING id, name`,
+    [workspace.id, input.name, safe.triggerHint as string, safe.body as string, allowed.actorPrincipalId, allowed.actorChatPlatform, input.tags],
+  );
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "skills.upserted",
+    resourceType: "skill",
+    resourceId: result.rows[0].id,
+    metadata: { name: input.name, source: "dashboard" },
+  });
+  sendJson(res, 200, { id: result.rows[0].id, name: result.rows[0].name });
+}
+
+async function handleDeleteSkill(context: RouteContext): Promise<void> {
+  const { res, url, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "skills:write", resource: "skill" });
+  if (!allowed.ok) return;
+  const idResult = z.uuid().safeParse(url.pathname.split("/")[3]);
+  if (!idResult.success) {
+    sendJson(res, 400, { error: "Invalid skill id" });
+    return;
+  }
+  const id = idResult.data;
+  const result = await state.pool.query(`DELETE FROM skill_definitions WHERE id = $1 AND workspace_id = $2 RETURNING id`, [id, workspace.id]);
+  if (!result.rowCount) {
+    sendJson(res, 404, { error: "Skill not found" });
+    return;
+  }
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "skills.deleted",
+    resourceType: "skill",
+    resourceId: id,
+  });
+  sendJson(res, 200, { id });
+}
+
+async function handlePluginMemoryWrite({ req, res, state }: RouteContext): Promise<void> {
+  if (!isAuthorizedInternalRequest(req)) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const input = pluginMemoryWriteSchema.parse(await readJson(req));
+  const principal = resolvePluginPrincipal(input.principalId);
+  if (!principal) {
+    sendJson(res, 400, { error: "missing_principal_context" });
+    return;
+  }
+  const workspace = await getWorkspace(state.pool);
+  const content = redactRecordForPersistence({ content: input.content }).content as string;
+  const inserted = await state.pool.query(
+    `INSERT INTO memory_entries (workspace_id, owner_principal_id, owner_platform, visibility, scope_key, tags, content)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, created_at`,
+    [workspace.id, principal.principalId, principal.platform, input.visibility, input.scopeKey ?? null, input.tags, content],
+  );
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    ...principalAuditIds(principal),
+    eventType: "memory.written",
+    resourceType: "memory",
+    resourceId: inserted.rows[0].id,
+    metadata: { visibility: input.visibility, scopeKey: input.scopeKey ?? null, platform: principal.platform, principalId: principal.principalId, source: "plugin" },
+  });
+  sendJson(res, 200, { id: inserted.rows[0].id, createdAt: inserted.rows[0].created_at });
+}
+
+async function handlePluginMemorySearch({ req, res, state }: RouteContext): Promise<void> {
+  if (!isAuthorizedInternalRequest(req)) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const input = pluginMemorySearchSchema.parse(await readJson(req));
+  const principal = resolvePluginPrincipal(input.principalId);
+  if (!principal) {
+    sendJson(res, 400, { error: "missing_principal_context" });
+    return;
+  }
+  const workspace = await getWorkspace(state.pool);
+  const scope = principalAuditIds(principal);
+  const rows = await queryMemoryEntries(state.pool, workspace.id, {
+    q: input.q,
+    tags: input.tags,
+    limit: input.limit,
+    principalScope: { slackUserId: scope.actorSlackUserId, teamsAadUserId: scope.actorTeamsAadUserId },
+  });
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    ...principalAuditIds(principal),
+    eventType: "memory.read",
+    resourceType: "memory",
+    metadata: { q: input.q ?? null, count: rows.length, platform: principal.platform, principalId: principal.principalId, source: "plugin" },
+  });
+  sendJson(res, 200, { entries: rows });
+}
+
+async function handlePluginSkillSearch({ req, res, state }: RouteContext): Promise<void> {
+  if (!isAuthorizedInternalRequest(req)) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const input = pluginSkillSearchSchema.parse(await readJson(req));
+  const principal = resolvePluginPrincipal(input.principalId);
+  if (!principal) {
+    sendJson(res, 400, { error: "missing_principal_context" });
+    return;
+  }
+  const workspace = await getWorkspace(state.pool);
+  const rows = await querySkills(state.pool, workspace.id, { q: input.q, tags: input.tags, limit: input.limit });
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    ...principalAuditIds(principal),
+    eventType: "skills.read",
+    resourceType: "skill",
+    metadata: { q: input.q ?? null, count: rows.length, platform: principal.platform, principalId: principal.principalId, source: "plugin" },
+  });
+  sendJson(res, 200, { skills: rows });
+}
+
 const listDefinitions: Record<string, { permission: { action: string; resource: string }; query: string }> = {
   audit_logs: {
     permission: { action: "audit:read", resource: "audit_log" },
@@ -3708,6 +4062,12 @@ async function route(context: RouteContext): Promise<void> {
   if (req.method === "POST" && url.pathname === "/api/export") return handleExport(context);
   if (req.method === "POST" && url.pathname === "/api/retention/purge") return handleRetentionPurge(context);
   if (req.method === "POST" && url.pathname === "/api/wipe") return handleWipe(context);
+  if (req.method === "GET" && url.pathname === "/api/memory") return handleListMemory(context);
+  if (req.method === "POST" && url.pathname === "/api/memory") return handleWriteMemory(context);
+  if (req.method === "DELETE" && /^\/api\/memory\/[^/]+$/.test(url.pathname)) return handleDeleteMemory(context);
+  if (req.method === "GET" && url.pathname === "/api/skills") return handleListSkills(context);
+  if (req.method === "POST" && url.pathname === "/api/skills") return handleUpsertSkill(context);
+  if (req.method === "DELETE" && /^\/api\/skills\/[^/]+$/.test(url.pathname)) return handleDeleteSkill(context);
   if (req.method === "GET" && url.pathname.startsWith("/internal/openclaw/secrets/")) return handleSecret(context);
   if (req.method === "POST" && url.pathname === "/internal/openclaw/events") return handleOpenClawEvent(context);
   if (req.method === "POST" && url.pathname === "/internal/plugin/user-context") return handlePluginUserContext(context);
@@ -3715,6 +4075,9 @@ async function route(context: RouteContext): Promise<void> {
   if (req.method === "POST" && url.pathname === "/internal/plugin/pipedream/apps") return handlePluginPipedreamSearchApps(context);
   if (req.method === "POST" && url.pathname === "/internal/plugin/pipedream/connect-token") return handlePluginPipedreamConnectToken(context);
   if (req.method === "POST" && url.pathname === "/internal/plugin/pipedream/accounts") return handlePluginPipedreamAccounts(context);
+  if (req.method === "POST" && url.pathname === "/internal/plugin/memory/write") return handlePluginMemoryWrite(context);
+  if (req.method === "POST" && url.pathname === "/internal/plugin/memory/search") return handlePluginMemorySearch(context);
+  if (req.method === "POST" && url.pathname === "/internal/plugin/skills/search") return handlePluginSkillSearch(context);
   if (req.method === "GET") return serveStatic(res, url.pathname);
   sendJson(res, 404, { error: "Not found" });
 }

@@ -21,6 +21,10 @@ export const defaultPermissions: Permission[] = [
   { action: "task:create", resource: "openclaw_task", description: "Delegate work to OpenClaw" },
   { action: "data:export", resource: "retention", description: "Export retained data" },
   { action: "data:wipe", resource: "retention", description: "Wipe retained data" },
+  { action: "memory:read", resource: "memory", description: "Read workspace memory entries" },
+  { action: "memory:write", resource: "memory", description: "Create or delete memory entries" },
+  { action: "skills:read", resource: "skill", description: "Read skill definitions" },
+  { action: "skills:write", resource: "skill", description: "Create, update, or delete skill definitions" },
 ];
 
 export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "action" | "resource">>> = {
@@ -44,6 +48,10 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "observability:sync", resource: "openclaw_observation" },
     { action: "data:export", resource: "retention" },
     { action: "data:wipe", resource: "retention" },
+    { action: "memory:read", resource: "memory" },
+    { action: "memory:write", resource: "memory" },
+    { action: "skills:read", resource: "skill" },
+    { action: "skills:write", resource: "skill" },
   ],
   integration_admin: [
     { action: "settings:read", resource: "workspace" },
@@ -54,6 +62,8 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "policy:read", resource: "policy" },
     { action: "session:read", resource: "session" },
     { action: "observability:sync", resource: "openclaw_observation" },
+    { action: "memory:read", resource: "memory" },
+    { action: "skills:read", resource: "skill" },
   ],
   billing_usage_admin: [
     { action: "settings:read", resource: "workspace" },
@@ -66,6 +76,9 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "session:read", resource: "session" },
     { action: "approval:read", resource: "approval" },
     { action: "approval:decide", resource: "approval" },
+    { action: "memory:read", resource: "memory" },
+    { action: "memory:write", resource: "memory" },
+    { action: "skills:read", resource: "skill" },
   ],
   viewer: [
     { action: "settings:read", resource: "workspace" },
@@ -74,6 +87,8 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "audit:read", resource: "audit_log" },
     { action: "usage:read", resource: "usage" },
     { action: "session:read", resource: "session" },
+    { action: "memory:read", resource: "memory" },
+    { action: "skills:read", resource: "skill" },
   ],
 };
 

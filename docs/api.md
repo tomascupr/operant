@@ -3,19 +3,19 @@
 Operant's control plane is a single `node:http` process. Every route
 dispatches from the `route()` function at the bottom of
 `apps/control-plane/src/server.ts`; this document is a concise map of
-that chain. The source is canonical — when in doubt, grep the handler
+that chain. The source is canonical; when in doubt, grep the handler
 name in `server.ts`.
 
 ## Surfaces
 
-- **Dashboard surface (`/api/*`)** — bearer-token authenticated. The
+- **Dashboard surface (`/api/*`)**: bearer-token authenticated. The
   vanilla-JS dashboard at `/` calls these. Sign in via
   `POST /api/auth/login` to get a token; subsequent requests send
   `Authorization: Bearer <token>`.
-- **Internal surface (`/internal/*`)** — authenticated with
+- **Internal surface (`/internal/*`)**: authenticated with
   `OPERANT_INTERNAL_TOKEN` (timing-safe equality). Only the OpenClaw
   gateway and the Operant OpenClaw plugin call these.
-- **Public health (`/healthz`, `/readyz`)** — unauthenticated. Safe for
+- **Public health (`/healthz`, `/readyz`)**: unauthenticated. Safe for
   load balancers and the `pnpm doctor` check.
 
 All responses are JSON unless noted, with `cache-control: no-store` and
@@ -152,7 +152,7 @@ decisions and user context. The control plane verifies the bearer with
 | GET    | `/internal/openclaw/secrets/<refId>`       | Resolve a SecretRef and return the plaintext value. Logs an `integration_credential.resolved` audit row. |
 | POST   | `/internal/openclaw/events`                | Ingest OpenClaw lifecycle events (session start/stop, tool invocation, approval requested).      |
 | POST   | `/internal/plugin/user-context`            | Fetch context for the calling Slack user: roles, allowed channels, tool entitlements.            |
-| POST   | `/internal/plugin/policy-check`            | Plugin asks "can this Slack user do `tool/action` in `channel`?" — same engine as `/api/policy/evaluate`. |
+| POST   | `/internal/plugin/policy-check`            | Plugin asks "can this chat user do `tool/action` in `channel`?" using the same engine as `/api/policy/evaluate`. |
 | POST   | `/internal/plugin/pipedream/apps`          | Plugin searches the Pipedream app catalog for Slack self-service.                                |
 | POST   | `/internal/plugin/pipedream/connect-token` | Plugin creates a Pipedream Connect link for the requesting Slack user.                           |
 | POST   | `/internal/plugin/pipedream/accounts`      | Plugin lists the requesting Slack user's connected Pipedream accounts.                           |

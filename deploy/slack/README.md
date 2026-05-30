@@ -14,7 +14,7 @@ OpenClaw owns.
 2. Pick **From an app manifest**, then choose the workspace you want to install
    into.
 3. Paste the contents of [manifest.yaml](manifest.yaml) into the YAML textarea
-   (the dialog defaults to JSON — switch the toggle to YAML first). Review the
+   (the dialog defaults to JSON, so switch the toggle to YAML first). Review the
    summary screen and click **Create**.
 4. Continue with the install steps below.
 

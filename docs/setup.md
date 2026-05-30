@@ -271,8 +271,8 @@ with `--msteams-webhook-bind`/`--msteams-webhook-port`).
 1. Create or reuse an Azure Bot registration and copy its app/client ID, tenant
    ID, and client secret into the dashboard Teams setup fields (or a private
    live env file).
-2. Expose the gateway webhook over HTTPS with your own reverse proxy or tunnel —
-   Operant does not bundle one — and set the Azure Bot **Messaging endpoint** to
+2. Expose the gateway webhook over HTTPS with your own reverse proxy or tunnel
+   (Operant does not bundle one), and set the Azure Bot **Messaging endpoint** to
    `https://<your-public-host>/api/messages`.
 3. Build the Teams app package from
    [deploy/teams/manifest.json](../deploy/teams/manifest.json) (replace both

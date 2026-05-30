@@ -55,7 +55,7 @@ two-actor audit semantics are documented in
 
 ## Known transitive issues
 
-- `ws@8.20.0` — [GHSA-58qx-3vcg-4xpx](https://github.com/advisories/GHSA-58qx-3vcg-4xpx),
+- `ws@8.20.0`: [GHSA-58qx-3vcg-4xpx](https://github.com/advisories/GHSA-58qx-3vcg-4xpx),
   moderate. Reaches us only through OpenClaw's `@google/genai` and
   `@mistralai/mistralai` transitive trees. Operant does not expose a
   public WebSocket surface; impact is bounded to the OpenClaw

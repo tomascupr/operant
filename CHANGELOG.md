@@ -3,6 +3,15 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.0] - 2026-05-31
+
+### Added
+- governed scheduled workflows (2ef16ba)
+
+
+### Documentation
+- document governed scheduled workflows (v0.5.0) (8cc929d)
+
 ## [0.4.0] - 2026-05-30
 
 ### Added

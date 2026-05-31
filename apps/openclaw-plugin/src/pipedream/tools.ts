@@ -155,7 +155,8 @@ export function createPipedreamListConnectionsTool(deps: PipedreamToolDependenci
 }
 
 function wrapPipedreamResult(result: PipedreamToolCallResult) {
-  const content = result.content.map((block) => ({
+  const blocks = Array.isArray(result.content) ? result.content : [];
+  const content = blocks.map((block) => ({
     type: "text" as const,
     text: block.text ?? JSON.stringify(block),
   }));

@@ -9,7 +9,13 @@ export type Database = pg.Pool;
 
 export function createPool(connectionString = process.env.DATABASE_URL): Database {
   if (!connectionString) throw new Error("DATABASE_URL is required");
-  return new Pool({ connectionString });
+  const pool = new Pool({ connectionString });
+  // Without a listener, an idle-client socket error (Postgres restart, network blip,
+  // pg_terminate_backend) is re-emitted as an unhandled 'error' and crashes the process.
+  pool.on("error", (error) => {
+    process.stderr.write(`pg pool idle-client error: ${error.message}\n`);
+  });
+  return pool;
 }
 
 export async function runMigrations(pool: Database): Promise<void> {

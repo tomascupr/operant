@@ -35,6 +35,26 @@ test("redacts AWS access keys even when glued to trailing word characters", () =
   assert.equal(serialized.includes("AKIAIOSFODNN7EXAMPLE"), false);
 });
 
+test("redacts the broader GitHub token family, JWTs, and Google API keys", () => {
+  const redacted = redactRecordForPersistence({
+    classic: "ghp_classicPATsecretvalue1234567890",
+    oauth: "gho_oauthtokensecretvalue1234567890",
+    user: "ghu_usertokensecretvalue1234567890",
+    server: "ghs_servertokensecretvalue1234567890",
+    refresh: "ghr_refreshtokensecretvalue1234567890",
+    jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    google: "AIza" + "x".repeat(35),
+    generic: "tok_genericpipedreamtokensecretvalue",
+  });
+  const serialized = JSON.stringify(redacted);
+  for (const fragment of [
+    "ghp_classicPAT", "gho_oauthtoken", "ghu_usertoken", "ghs_servertoken", "ghr_refreshtoken",
+    "eyJhbGci", "AIzax", "tok_genericpipedream",
+  ]) {
+    assert.equal(serialized.includes(fragment), false, `${fragment} must be redacted`);
+  }
+});
+
 test("redacts set-cookie and plural credentials keys, not just exact matches", () => {
   const redacted = redactRecordForPersistence({
     "set-cookie": "session=plain-cookie-value",

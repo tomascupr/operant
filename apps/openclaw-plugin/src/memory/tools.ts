@@ -70,7 +70,7 @@ export function createMemoryWriteTool(deps: MemoryToolDependencies) {
         visibility,
         scopeKey,
         tags: stringArray(params.tags),
-      });
+      }).catch((error) => ({ error: "memory_unavailable", message: error instanceof Error ? error.message : "unknown error" }));
       return jsonResult(result);
     },
   };
@@ -91,7 +91,7 @@ export function createMemorySearchTool(deps: MemoryToolDependencies) {
         q,
         tags: stringArray(params.tags),
         limit: clampLimit(params.limit, 10),
-      });
+      }).catch((error) => ({ error: "memory_unavailable", message: error instanceof Error ? error.message : "unknown error" }));
       return jsonResult(result);
     },
   };
@@ -112,7 +112,7 @@ export function createSkillsSearchTool(deps: MemoryToolDependencies) {
         q,
         tags: stringArray(params.tags),
         limit: clampLimit(params.limit, 10),
-      });
+      }).catch((error) => ({ error: "skills_unavailable", message: error instanceof Error ? error.message : "unknown error" }));
       return jsonResult(result);
     },
   };

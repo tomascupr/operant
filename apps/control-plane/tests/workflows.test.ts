@@ -133,6 +133,9 @@ test("schedule validators accept cron + duration shapes and reject junk", () => 
   // The create schema cross-checks expression against kind.
   assert.equal(scheduledWorkflowCreateSchema.safeParse({ name: "x", scheduleKind: "cron", scheduleExpression: "1h", targetChannel: "C1", message: "hi" }).success, false);
   assert.equal(scheduledWorkflowCreateSchema.safeParse({ name: "x", scheduleKind: "every", scheduleExpression: "1h", targetChannel: "C1", message: "hi" }).success, true);
+  // A timezone only applies to cron; reject it on 'every' so the stored definition can't claim one the gateway ignores.
+  assert.equal(scheduledWorkflowCreateSchema.safeParse({ name: "x", scheduleKind: "every", scheduleExpression: "1h", timezone: "Europe/Prague", targetChannel: "C1", message: "hi" }).success, false);
+  assert.equal(scheduledWorkflowCreateSchema.safeParse({ name: "x", scheduleKind: "cron", scheduleExpression: "0 9 * * 1-5", timezone: "Europe/Prague", targetChannel: "C1", message: "hi" }).success, true);
 });
 
 // A stub `openclaw` that leaks its gateway token to stderr and fails, to prove scrubbing.
@@ -331,7 +334,7 @@ test("POST /api/workflows surfaces a duplicate name as 409", async () => {
 test("POST /api/workflows/sync flags a vanished gateway job as drift", async () => {
   const stub = writeStubCli();
   const statusUpdates: unknown[][] = [];
-  const { pool } = createFakePool((sql, params) => {
+  const { calls, pool } = createFakePool((sql, params) => {
     const seeded = seedQueries(sql, params);
     if (seeded) return seeded;
     const rbac = rbacHeaderActor(sql, OWNER);
@@ -343,7 +346,7 @@ test("POST /api/workflows/sync flags a vanished gateway job as drift", async () 
         workflowRow({ id: "88888888-8888-4888-8888-888888888888", name: "gone", openclaw_cron_id: "cron-job-missing", materialization_status: "materialized" }),
       ]);
     }
-    if (/UPDATE scheduled_workflows SET materialization_status = \$2/.test(sql)) {
+    if (/UPDATE scheduled_workflows[\s\S]*materialization_status = \$2/.test(sql)) {
       statusUpdates.push(params);
       return result();
     }
@@ -361,6 +364,156 @@ test("POST /api/workflows/sync flags a vanished gateway job as drift", async () 
       const statuses = statusUpdates.map((row) => row[1]);
       assert.ok(statuses.includes("materialized"));
       assert.ok(statuses.includes("drift"));
+      // On drift the stale gateway id must be cleared so a later apply re-adds a fresh job.
+      assert.ok(
+        calls.some((c) => /UPDATE scheduled_workflows[\s\S]*openclaw_cron_id = CASE WHEN \$2 = 'drift'/.test(c.sql)),
+        "drift reconcile must clear the stale openclaw_cron_id",
+      );
+    });
+  });
+});
+
+// A stub whose `cron add` succeeds (exit 0) but returns no parseable job id.
+function writeNoIdStubCli(): string {
+  const dir = mkdtempSync(join(tmpdir(), "operant-cron-noid-"));
+  const path = join(dir, "openclaw-noid.mjs");
+  writeFileSync(path, [
+    "#!/usr/bin/env node",
+    "process.stdout.write(JSON.stringify({ ok: true }));",
+    "process.exit(0);",
+    "",
+  ].join("\n"));
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("POST /api/workflows records 'error' when cron add succeeds but returns no job id", async () => {
+  const stub = writeNoIdStubCli();
+  const updates: unknown[][] = [];
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/INSERT INTO scheduled_workflows/.test(sql)) return result([workflowRow()]);
+    if (/UPDATE scheduled_workflows[\s\S]*materialization_status = \$3/.test(sql)) {
+      updates.push(params);
+      return result([workflowRow({ openclaw_cron_id: params[1], materialization_status: params[2] })]);
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) return result();
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true", OPENCLAW_CLI_COMMAND: stub }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, "/api/workflows", {
+        method: "POST",
+        headers: { "x-operant-slack-user-id": "UOWNER" },
+        body: JSON.stringify({ name: "daily-standup", scheduleKind: "every", scheduleExpression: "1h", targetChannel: "C1", message: "go" }),
+      });
+      assert.equal(res.response.status, 201);
+      assert.equal((res.body.apply as Record<string, unknown>).status, "error");
+      assert.equal((res.body.apply as Record<string, unknown>).ok, false);
+      // Persisted with a NULL cron id (param $2) so re-apply does not blindly re-add a duplicate.
+      assert.equal(updates[0][1], null);
+      assert.equal(updates[0][2], "error");
+      assert.match(String(updates[0][3]), /no job id/);
+    });
+  });
+});
+
+test("POST /api/workflows/:id/apply re-materializes a drifted workflow by re-adding the cron job", async () => {
+  const stub = writeStubCli();
+  const updates: unknown[][] = [];
+  const auditRows: unknown[][] = [];
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/SELECT[\s\S]*FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      // Drifted: enabled, but the stale id was cleared by a prior reconcile.
+      return result([workflowRow({ openclaw_cron_id: null, materialization_status: "drift" })]);
+    }
+    if (/UPDATE scheduled_workflows[\s\S]*materialization_status = \$3/.test(sql)) {
+      updates.push(params);
+      return result([workflowRow({ openclaw_cron_id: params[1], materialization_status: params[2] })]);
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) {
+      auditRows.push(params);
+      return result();
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true", OPENCLAW_CLI_COMMAND: stub }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, `/api/workflows/${workflowId}/apply`, {
+        method: "POST",
+        headers: { "x-operant-slack-user-id": "UOWNER" },
+        body: JSON.stringify({}),
+      });
+      assert.equal(res.response.status, 200);
+      assert.equal((res.body.apply as Record<string, unknown>).status, "materialized");
+      assert.equal(updates[0][1], "cron-job-1");
+      assert.ok(auditRows.some((row) => row[5] === "workflow.applied"));
+    });
+  });
+});
+
+test("POST /api/workflows/:id/apply disables a materialized workflow via cron disable", async () => {
+  const stub = writeStubCli();
+  const updates: unknown[][] = [];
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/SELECT[\s\S]*FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      return result([workflowRow({ openclaw_cron_id: "cron-job-1", materialization_status: "materialized", enabled: true })]);
+    }
+    if (/UPDATE scheduled_workflows SET enabled = \$2/.test(sql)) {
+      return result([workflowRow({ openclaw_cron_id: "cron-job-1", enabled: params[1] as boolean })]);
+    }
+    if (/UPDATE scheduled_workflows[\s\S]*materialization_status = \$3/.test(sql)) {
+      updates.push(params);
+      return result([workflowRow({ openclaw_cron_id: params[1], materialization_status: params[2] })]);
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) return result();
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true", OPENCLAW_CLI_COMMAND: stub }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, `/api/workflows/${workflowId}/apply`, {
+        method: "POST",
+        headers: { "x-operant-slack-user-id": "UOWNER" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      assert.equal(res.response.status, 200);
+      assert.equal((res.body.apply as Record<string, unknown>).status, "disabled");
+      assert.equal(updates[0][2], "disabled");
+    });
+  });
+});
+
+test("POST /api/workflows/:id/apply returns 404 for an unknown workflow", async () => {
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/SELECT[\s\S]*FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) return result([]);
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true" }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, `/api/workflows/${workflowId}/apply`, {
+        method: "POST",
+        headers: { "x-operant-slack-user-id": "UOWNER" },
+        body: JSON.stringify({ enabled: true }),
+      });
+      assert.equal(res.response.status, 404);
     });
   });
 });

@@ -1066,7 +1066,9 @@ async function handleAuthLogin(context: RouteContext): Promise<void> {
       outcome: "deny",
       metadata: { slackUserId: body.slackUserId, teamsAadUserId: body.teamsAadUserId, platform, code },
     });
-    authRateLimit.recordFailure(ip);
+    // No recordFailure here: these branches require a VALID admin token, so they are normal
+    // setup states (workspace not bootstrapped / operator not yet provisioned). Counting them
+    // would let a legitimate operator lock their own IP out. Invalid tokens record above (401).
     sendJson(res, 403, {
       error: bootstrapRequired ? "Workspace not bootstrapped" : "No Operant role assignment for chat user",
       code,
@@ -1918,6 +1920,7 @@ async function handleOpenClawCheck(context: RouteContext): Promise<void> {
     extraEnv: openClawCommandExtraEnv(workspace),
     timeoutMs: Number(process.env.OPENCLAW_CHECK_TIMEOUT_MS || 20_000),
   });
+  const safeStderr = scrubOpenClawOutput(result.stderr).slice(0, 2000);
   await audit(state.pool, {
     companyId: workspace.company_id,
     workspaceId: workspace.id,
@@ -1929,10 +1932,14 @@ async function handleOpenClawCheck(context: RouteContext): Promise<void> {
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       command: result.command,
-      stderr: result.stderr.slice(0, 2000),
+      stderr: safeStderr,
     },
   });
-  sendJson(res, result.exitCode === 0 ? 200 : 502, result);
+  sendJson(res, result.exitCode === 0 ? 200 : 502, {
+    ...result,
+    stdout: scrubOpenClawOutput(result.stdout),
+    stderr: safeStderr,
+  });
 }
 
 async function latestPipedreamInvocation(pool: Queryable, workspaceId: string) {
@@ -1979,7 +1986,7 @@ async function handlePipedreamDiagnostics(context: RouteContext): Promise<void> 
       command: pluginCommand.command,
       exitCode: pluginCommand.exitCode,
       timedOut: pluginCommand.timedOut,
-      stderr: pluginCommand.stderr.slice(0, 500),
+      stderr: scrubOpenClawOutput(pluginCommand.stderr).slice(0, 500),
     },
     oauth,
     lastInvocation,
@@ -2242,14 +2249,21 @@ async function handleSyncOpenClawObservations(context: RouteContext): Promise<vo
       eventType: "openclaw.observations.sync",
       resourceType: "openclaw_observation",
       outcome: "failure",
-      metadata: { command: status.command, exitCode: status.exitCode, stderr: status.stderr.slice(0, 2000) },
+      metadata: { command: status.command, exitCode: status.exitCode, stderr: scrubOpenClawOutput(status.stderr).slice(0, 2000) },
     });
-    sendJson(res, 502, { error: "OpenClaw status sync failed", status });
+    sendJson(res, 502, {
+      error: "OpenClaw status sync failed",
+      status: { command: status.command, exitCode: status.exitCode, timedOut: status.timedOut, stderr: scrubOpenClawOutput(status.stderr).slice(0, 2000) },
+    });
     return;
   }
   const sessions = await runOpenClawCommand(["sessions", "--json"], commandParams);
   const tasks = await runOpenClawCommand(["tasks", "list", "--json"], commandParams);
   const usageCost = await runOpenClawCommand(openClawGatewayCommandArgs(["gateway", "usage-cost", "--json"], commandParams), commandParams);
+
+  const sessionsStderr = scrubOpenClawOutput(sessions.stderr).slice(0, 2000);
+  const tasksStderr = scrubOpenClawOutput(tasks.stderr).slice(0, 2000);
+  const usageCostStderr = scrubOpenClawOutput(usageCost.stderr).slice(0, 2000);
 
   const client = await state.pool.connect();
   try {
@@ -2273,13 +2287,13 @@ async function handleSyncOpenClawObservations(context: RouteContext): Promise<vo
         statusCommand: status.command,
         sessionsCommand: sessions.command,
         sessionsExitCode: sessions.exitCode,
-        sessionsStderr: sessions.stderr.slice(0, 2000),
+        sessionsStderr,
         tasksCommand: tasks.command,
         tasksExitCode: tasks.exitCode,
-        tasksStderr: tasks.stderr.slice(0, 2000),
+        tasksStderr,
         usageCostCommand: usageCost.command,
         usageCostExitCode: usageCost.exitCode,
-        usageCostStderr: usageCost.stderr.slice(0, 2000),
+        usageCostStderr,
       },
     });
     await client.query("COMMIT");
@@ -2287,9 +2301,9 @@ async function handleSyncOpenClawObservations(context: RouteContext): Promise<vo
       ok: true,
       synced,
       status: { command: status.command, exitCode: status.exitCode, timedOut: status.timedOut },
-      sessions: { command: sessions.command, exitCode: sessions.exitCode, timedOut: sessions.timedOut, stderr: sessions.stderr.slice(0, 2000) },
-      tasks: { command: tasks.command, exitCode: tasks.exitCode, timedOut: tasks.timedOut, stderr: tasks.stderr.slice(0, 2000) },
-      usageCost: { command: usageCost.command, exitCode: usageCost.exitCode, timedOut: usageCost.timedOut, stderr: usageCost.stderr.slice(0, 2000) },
+      sessions: { command: sessions.command, exitCode: sessions.exitCode, timedOut: sessions.timedOut, stderr: sessionsStderr },
+      tasks: { command: tasks.command, exitCode: tasks.exitCode, timedOut: tasks.timedOut, stderr: tasksStderr },
+      usageCost: { command: usageCost.command, exitCode: usageCost.exitCode, timedOut: usageCost.timedOut, stderr: usageCostStderr },
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -3469,9 +3483,16 @@ async function materializeWorkflow(pool: Queryable, workspace: any, row: any): P
     exitCode = result.exitCode;
     stderr = scrubOpenClawOutput(result.stderr);
     if (result.exitCode === 0) {
-      status = "materialized";
       if (!cronId) cronId = extractCronJobId(result.json);
-      errorText = null;
+      if (!cronId) {
+        // `cron add` reported success but returned no job id. Marking 'materialized'
+        // without an id would re-`cron add` on the next apply and orphan a duplicate job.
+        status = "error";
+        errorText = "gateway accepted cron add but returned no job id";
+      } else {
+        status = "materialized";
+        errorText = null;
+      }
     } else {
       status = "error";
       errorText = scrubOpenClawOutput(result.stderr || result.stdout || "gateway command failed").slice(0, 2000);
@@ -3504,7 +3525,7 @@ async function materializeWorkflow(pool: Queryable, workspace: any, row: any): P
      RETURNING ${WORKFLOW_COLUMNS}`,
     [row.id, cronId, status, errorText],
   );
-  return { row: updated.rows[0] ?? row, apply: { status, ok: exitCode === 0, command, exitCode, stderr: stderr.slice(0, 2000) } };
+  return { row: updated.rows[0] ?? row, apply: { status, ok: status !== "error", command, exitCode, stderr: stderr.slice(0, 2000) } };
 }
 
 async function handleListWorkflows(context: RouteContext): Promise<void> {
@@ -3689,8 +3710,14 @@ async function handleReconcileWorkflows(context: RouteContext): Promise<void> {
     const job = observed.get(row.openclaw_cron_id);
     const status = !job ? "drift" : job.enabled === false ? "disabled" : "materialized";
     if (status === "drift") drift += 1;
+    // On drift the gateway job is gone; clear the dangling id so a later apply re-`cron add`s
+    // a fresh job rather than forever retrying `cron enable` against a non-existent id.
     await state.pool.query(
-      `UPDATE scheduled_workflows SET materialization_status = $2, updated_at = now() WHERE id = $1`,
+      `UPDATE scheduled_workflows
+         SET materialization_status = $2,
+             openclaw_cron_id = CASE WHEN $2 = 'drift' THEN NULL ELSE openclaw_cron_id END,
+             updated_at = now()
+       WHERE id = $1`,
       [row.id, status],
     );
     reconciled += 1;
@@ -4417,8 +4444,10 @@ export function createHttpServer(state: ServerState) {
         });
         return;
       }
-      const message = error instanceof Error ? error.message : "Unknown error";
-      sendJson(res, 500, { error: message });
+      // Log the real error server-side, but do not echo it to the client: DB driver errors
+      // routinely carry table/column/constraint names and query fragments.
+      process.stderr.write(`unhandled request error: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+      sendJson(res, 500, { error: "Internal server error" });
     });
   });
 }

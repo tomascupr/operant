@@ -27,6 +27,7 @@ export interface PipedreamClientOptions {
   environment: "development" | "production";
   tokenUrl?: string;
   tokenRefreshBufferMs?: number;
+  requestTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -67,6 +68,7 @@ interface JsonRpcResponse<T> {
 
 const DEFAULT_TOKEN_URL = "https://api.pipedream.com/v1/oauth/token";
 const DEFAULT_REFRESH_BUFFER_MS = 60_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const FALLBACK_TOKEN_TTL_SECONDS = 300;
 const MAX_ERROR_BODY_CHARS = 500;
 
@@ -93,6 +95,7 @@ export function createPipedreamClient(options: PipedreamClientOptions): Pipedrea
   const now = options.now ?? (() => Date.now());
   const tokenUrl = options.tokenUrl ?? DEFAULT_TOKEN_URL;
   const refreshBufferMs = options.tokenRefreshBufferMs ?? DEFAULT_REFRESH_BUFFER_MS;
+  const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const mcpUrl = options.mcpUrl.replace(/\/$/, "");
   // This OAuth token is project-scoped client-credentials auth. Per-user isolation
   // comes from the x-pd-external-user-id header set on every RPC below.
@@ -101,15 +104,21 @@ export function createPipedreamClient(options: PipedreamClientOptions): Pipedrea
   let nextRpcId = 1;
 
   async function fetchAccessToken(): Promise<string> {
-    const response = await fetchImpl(tokenUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        grant_type: "client_credentials",
-        client_id: options.clientId,
-        client_secret: options.clientSecret,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(tokenUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "client_credentials",
+          client_id: options.clientId,
+          client_secret: options.clientSecret,
+        }),
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+    } catch (error) {
+      throw new PipedreamClientError(tokenUrl, 0, error instanceof Error ? error.message : "token request failed");
+    }
     if (!response.ok) {
       throw new PipedreamClientError(tokenUrl, response.status, "oauth token mint failed");
     }
@@ -144,12 +153,21 @@ export function createPipedreamClient(options: PipedreamClientOptions): Pipedrea
       "x-pd-external-user-id": slackUserId,
     };
     if (appSlug) headers["x-pd-app-slug"] = appSlug;
-    const response = await fetchImpl(mcpUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(mcpUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+    } catch (error) {
+      throw new PipedreamClientError(mcpUrl, 0, error instanceof Error ? error.message : "rpc request failed");
+    }
     if (!response.ok) {
+      // A revoked/rotated token can fail before its advertised TTL; drop the cache so the
+      // next call re-mints instead of replaying a dead token until natural expiry.
+      if (response.status === 401 || response.status === 403) cached = null;
       const text = await response.text().catch(() => "");
       throw new PipedreamClientError(mcpUrl, response.status, sanitizePipedreamMessage(text.slice(0, MAX_ERROR_BODY_CHARS)));
     }

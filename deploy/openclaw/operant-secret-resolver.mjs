@@ -3,7 +3,12 @@
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
 
-const request = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+let request;
+try {
+  request = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+} catch {
+  request = {};
+}
 const baseUrl = process.env.OPERANT_CONTROL_PLANE_URL;
 const token = process.env.OPERANT_INTERNAL_TOKEN;
 
@@ -23,6 +28,7 @@ for (const id of request.ids || []) {
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/openclaw/secrets/${encodeURIComponent(id)}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(Number(process.env.OPERANT_RESOLVER_TIMEOUT_MS || 10000)),
     });
     if (!response.ok) {
       errors[id] = { message: `Secret lookup failed with ${response.status}` };

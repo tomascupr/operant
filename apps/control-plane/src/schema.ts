@@ -371,6 +371,11 @@ export const scheduledWorkflowCreateSchema = z.object({
   if (value.scheduleKind === "every" && !isValidEveryDuration(value.scheduleExpression)) {
     ctx.addIssue({ code: "custom", path: ["scheduleExpression"], message: "Use a duration like 10m, 1h, or 30s" });
   }
+  // The gateway only applies --tz to cron schedules; reject it for 'every' so the stored
+  // definition cannot claim a timezone the executor silently ignores.
+  if (value.scheduleKind === "every" && value.timezone) {
+    ctx.addIssue({ code: "custom", path: ["timezone"], message: "Timezone applies only to cron schedules" });
+  }
 });
 export type ScheduledWorkflowCreateInput = z.infer<typeof scheduledWorkflowCreateSchema>;
 

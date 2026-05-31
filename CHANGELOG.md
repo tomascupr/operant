@@ -3,6 +3,15 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.2] - 2026-05-31
+
+### Documentation
+- reflect source-scrubbing, boot-only seeding, and workflow locking invariants (ebc050c)
+
+
+### Fixed
+- workflow apply/delete locking, intent-based reconcile, boot-only seeding, strict secret-key parsing (23a5b9e)
+
 ## [0.5.1] - 2026-05-31
 
 ### Documentation

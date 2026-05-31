@@ -145,6 +145,32 @@ redacted before persistence.
 `integration_admin` and `viewer` are read-only; `member` adds `memory:write`.
 `skills:write` (skill authoring) is owner/admin only.
 
+## Scheduled workflows
+
+Governed recurring agent runs. Operant owns the definition, RBAC, and audit;
+OpenClaw's cron subsystem executes. A create/apply materializes the workflow
+into OpenClaw cron (`openclaw cron add|enable|disable`); the message body is
+redacted before persistence and gateway CLI output is scrubbed of secrets
+before it is stored or returned. Materialization is best-effort: if the
+control-plane device is not yet approved for the gateway's cron scopes the row
+is saved with `materializationStatus: "error"` instead of failing the request,
+and can be re-applied once paired.
+
+| Method | Path                       | Auth                | Purpose                                                                                                       |
+| ------ | -------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/workflows`           | session (`workflow:read`)  | List scheduled workflows for the workspace.                                                            |
+| POST   | `/api/workflows`           | session (`workflow:write`, owner/admin only) | Create a workflow. Body `{name, scheduleKind:"cron"\|"every", scheduleExpression, timezone?, targetChannel, message, tools?, enabled?}`. 201 with `{workflow, apply}`; 409 on duplicate name. |
+| POST   | `/api/workflows/<id>/apply`| session (`workflow:write`, owner/admin only) | Optionally set `{enabled}`, then (re)materialize into OpenClaw cron. Returns `{workflow, apply}`.       |
+| POST   | `/api/workflows/sync`      | session (`workflow:read`)  | Reconcile materialized rows against `openclaw cron list`; a vanished job is flagged `drift`.            |
+| DELETE | `/api/workflows/<id>`      | session (`workflow:write`, owner/admin only) | Delete a workflow and best-effort remove its OpenClaw cron job.                                        |
+
+`workflow:read`/`workflow:write` resolve to resource `workflow`. `workflow:write`
+(authoring an autonomous recurring run) is owner/admin only; `workflow:read` is
+granted to every role except `billing_usage_admin`. Each create/apply/delete/sync
+emits an audit row (`workflow.created`, `workflow.applied`, `workflow.deleted`,
+`workflow.reconciled`). Cron *run* history surfaces through the existing
+`/api/jobs` mirror (cron-originated tasks carry `runtime: "cron"`).
+
 ## Activity, audit, usage, approvals
 
 | Method | Path                     | Auth    | Purpose                                                  |

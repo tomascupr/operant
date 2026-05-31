@@ -100,12 +100,16 @@ workspace or to a specific Slack user.
   named-approver policies for risky actions.
 - Static same-origin admin dashboard: Setup, Health, Integrations,
   Policy, People, Approvals, Activity, Usage, Data, OpenClaw operator,
-  and Knowledge views. No bundler, no external scripts, strict CSP.
+  Knowledge, and Workflows views. No bundler, no external scripts, strict CSP.
 - Governed team memory and admin-curated skill definitions, RBAC-gated
   and audit-attested, with team/private isolation enforced server-side.
   Complementary to OpenClaw's native memory plugin: the Operant store is
   the governed, attestable path agents reach through the
   `operant_memory_*` and `operant_skills_*` tools.
+- Governed scheduled workflows: define recurring agent runs (cron or
+  interval) that Operant owns, RBAC-gates (authoring is owner/admin only),
+  and audits, then materializes into OpenClaw's cron for execution.
+  Materialization is fails-soft and reconciled back from the gateway.
 - One Postgres for state, optional Redis profile, Docker Compose
   topology with localhost-bound host ports and a per-workspace trust
   boundary. Helm chart and Fly artifacts ship for graduation.
@@ -122,6 +126,7 @@ workspace or to a specific Slack user.
 | Approvals | Named approvers, minimum approvals, dashboard decisions |
 | Audit and usage | Postgres audit log, sessions/jobs, per-user token and cost rows |
 | Memory and skills | Dashboard Knowledge view, team/private isolation, RBAC-gated, audit-attested |
+| Scheduled workflows | Dashboard Workflows view, governed cron/interval runs materialized into OpenClaw cron, RBAC-gated, audit-attested |
 | Self-hosting | Docker Compose first, Helm/Fly artifacts for graduation |
 
 ![A real Operant deployment in Slack: multi-thread workspace activity from real users](docs/assets/slack-real-workspace.png)

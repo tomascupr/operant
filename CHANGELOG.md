@@ -3,6 +3,15 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.1] - 2026-05-31
+
+### Documentation
+- sharpen the README for OSS, document scheduled workflows, and correct API/contributor docs (7f0b11a)
+
+
+### Fixed
+- harden redaction, gateway-output scrubbing, fetch timeouts, and workflow materialization (3fd83c5)
+
 ## [0.5.0] - 2026-05-31
 
 ### Added

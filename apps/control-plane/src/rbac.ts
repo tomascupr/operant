@@ -25,6 +25,8 @@ export const defaultPermissions: Permission[] = [
   { action: "memory:write", resource: "memory", description: "Create or delete memory entries" },
   { action: "skills:read", resource: "skill", description: "Read skill definitions" },
   { action: "skills:write", resource: "skill", description: "Create, update, or delete skill definitions" },
+  { action: "workflow:read", resource: "workflow", description: "Read scheduled workflows" },
+  { action: "workflow:write", resource: "workflow", description: "Create, update, delete, or apply scheduled workflows" },
 ];
 
 export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "action" | "resource">>> = {
@@ -52,6 +54,8 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "memory:write", resource: "memory" },
     { action: "skills:read", resource: "skill" },
     { action: "skills:write", resource: "skill" },
+    { action: "workflow:read", resource: "workflow" },
+    { action: "workflow:write", resource: "workflow" },
   ],
   integration_admin: [
     { action: "settings:read", resource: "workspace" },
@@ -64,6 +68,7 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "observability:sync", resource: "openclaw_observation" },
     { action: "memory:read", resource: "memory" },
     { action: "skills:read", resource: "skill" },
+    { action: "workflow:read", resource: "workflow" },
   ],
   billing_usage_admin: [
     { action: "settings:read", resource: "workspace" },
@@ -79,6 +84,7 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "memory:read", resource: "memory" },
     { action: "memory:write", resource: "memory" },
     { action: "skills:read", resource: "skill" },
+    { action: "workflow:read", resource: "workflow" },
   ],
   viewer: [
     { action: "settings:read", resource: "workspace" },
@@ -89,6 +95,7 @@ export const defaultRolePermissions: Record<RoleName, Array<Pick<Permission, "ac
     { action: "session:read", resource: "session" },
     { action: "memory:read", resource: "memory" },
     { action: "skills:read", resource: "skill" },
+    { action: "workflow:read", resource: "workflow" },
   ],
 };
 

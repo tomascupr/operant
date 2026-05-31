@@ -38,6 +38,7 @@
           <button type="button" class="nav-tab" data-view-target="data-view">Data</button>
           <button type="button" class="nav-tab" data-view-target="openclaw-view">OpenClaw</button>
           <button type="button" class="nav-tab" data-view-target="knowledge-view">Knowledge</button>
+          <button type="button" class="nav-tab" data-view-target="workflows-view">Workflows</button>
         </nav>
       </aside>
 
@@ -656,6 +657,57 @@
               </div>
             </form>
             <div id="skill-write-result" class="result-surface" role="status"></div>
+          </section>
+        </section>
+
+        <section id="workflows-view" class="view" aria-labelledby="workflows-title">
+          <div class="view-heading">
+            <div>
+              <h2 id="workflows-title">Scheduled Workflows</h2>
+              <p>Governed recurring agent runs. Operant owns the definition, RBAC, and audit; OpenClaw's cron executes. Applying a workflow needs the control-plane device approved for cron scopes on the gateway.</p>
+            </div>
+            <div class="actions">
+              <button id="reconcile-workflows" type="button" class="secondary-button">Sync from gateway</button>
+              <button id="refresh-workflows" type="button" class="secondary-button">Refresh</button>
+            </div>
+          </div>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>Workflows</h3>
+                <p>Enable, disable, re-apply, or delete a schedule. Status reflects the last materialization into OpenClaw.</p>
+              </div>
+            </div>
+            <div id="workflows-result" class="table-surface">Sign in to view scheduled workflows.</div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <h3>New scheduled workflow</h3>
+                <p>The message is sent to the agent on schedule; its reply is delivered to the target channel. The message is redacted before storage.</p>
+              </div>
+            </div>
+            <form id="workflow-write-form" class="form-grid">
+              <label>Name<input name="name" placeholder="daily-standup" required /></label>
+              <label>Schedule type
+                <select name="scheduleKind">
+                  <option value="cron" selected>Cron expression</option>
+                  <option value="every">Every (interval)</option>
+                </select>
+              </label>
+              <label>Schedule<input name="scheduleExpression" placeholder="0 9 * * 1-5  or  1h" required /></label>
+              <label>Timezone<input name="timezone" placeholder="Europe/Prague (cron only)" /></label>
+              <label>Target channel<input name="targetChannel" placeholder="C0123ABCD or last" required /></label>
+              <label>Tools<input name="tools" placeholder="read, exec (optional allow-list)" /></label>
+              <label class="wide-field">Message<textarea name="message" placeholder="Post a short standup summarising open PRs." required></textarea></label>
+              <label class="checkbox-field"><input type="checkbox" name="enabled" checked /> Enabled</label>
+              <div class="form-actions">
+                <button type="submit">Create &amp; apply</button>
+              </div>
+            </form>
+            <div id="workflow-write-result" class="result-surface" role="status"></div>
           </section>
         </section>
       </main>

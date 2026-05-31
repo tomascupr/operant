@@ -261,6 +261,7 @@ function renderSignedOut() {
   $("integration-credentials-result").replaceChildren(emptyState("Sign in required", "Credential metadata is hidden until sign-in."));
   $("memory-result").replaceChildren(emptyState("Sign in required", "Memory is hidden until sign-in."));
   $("skills-result").replaceChildren(emptyState("Sign in required", "Skills are hidden until sign-in."));
+  $("workflows-result").replaceChildren(emptyState("Sign in required", "Scheduled workflows are hidden until sign-in."));
   $("pipedream-diagnostics").textContent = "Sign in to view Pipedream diagnostics.";
   $("pipedream-apps-grid").textContent = "Sign in to manage Pipedream policies.";
   $("pipedream-marketplace-grid").replaceChildren(emptyState("Sign in required", "Pipedream apps are hidden until sign-in."));
@@ -1022,6 +1023,88 @@ async function deleteSkill(id) {
   }
 }
 
+const WORKFLOW_STATUS_TONE = { materialized: "ok", disabled: "pending", pending: "pending", error: "bad", drift: "bad" };
+
+function renderWorkflows(items) {
+  renderTable($("workflows-result"), [
+    { label: "Name", key: "name" },
+    { label: "Schedule", render: (row) => text(row.schedule_kind === "every" ? `every ${row.schedule_expression}` : row.schedule_expression) },
+    { label: "Channel", render: (row) => text(row.target_channel) },
+    { label: "Status", render: (row) => {
+      const pill = statusPill(row.materialization_status, WORKFLOW_STATUS_TONE[row.materialization_status] ?? "pending");
+      if (row.materialization_error) pill.title = row.materialization_error;
+      return pill;
+    } },
+    { label: "", render: (row) => {
+      const wrap = el("div", { className: "actions" });
+      const toggle = el("button", { type: "button", className: "ghost-button", textContent: row.enabled ? "Disable" : "Enable" });
+      toggle.addEventListener("click", () => applyWorkflow(row.id, !row.enabled));
+      const apply = el("button", { type: "button", className: "ghost-button", textContent: "Apply" });
+      apply.addEventListener("click", () => applyWorkflow(row.id));
+      const remove = el("button", { type: "button", className: "ghost-button", textContent: "Delete" });
+      remove.addEventListener("click", () => deleteWorkflow(row.id, row.name));
+      wrap.append(toggle, apply, remove);
+      return wrap;
+    } },
+  ], items, "No scheduled workflows", "Define a governed recurring run below; OpenClaw's cron executes it.");
+}
+
+async function loadWorkflows() {
+  const data = await request("/api/workflows");
+  appState.workflows = data.items ?? [];
+  renderWorkflows(appState.workflows);
+}
+
+// Surface the gateway outcome: materialized is success; error usually means the
+// control-plane device is not yet approved for cron scopes on the gateway.
+function reportApply(apply) {
+  if (!apply) return;
+  if (apply.status === "materialized") toast("Applied to OpenClaw cron.");
+  else if (apply.status === "disabled") toast("Disabled on OpenClaw cron.");
+  else if (apply.status === "error") toast(`Saved, but gateway apply failed: ${(apply.stderr || "").split("\n")[0] || "device not approved for cron scopes?"}`);
+  else toast("Saved (not yet applied to the gateway).");
+}
+
+async function applyWorkflow(id, enabled) {
+  try {
+    const body = typeof enabled === "boolean" ? JSON.stringify({ enabled }) : "{}";
+    const data = await request(`/api/workflows/${id}/apply`, { method: "POST", body });
+    reportApply(data.apply);
+    await loadWorkflows();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteWorkflow(id, name) {
+  const ok = await confirmAction({
+    title: "Delete scheduled workflow",
+    detail: `This removes "${name}" from Operant and best-effort removes its OpenClaw cron job.`,
+    summary: "A workflow.deleted audit event is recorded.",
+    acceptLabel: "Delete Workflow",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await request(`/api/workflows/${id}`, { method: "DELETE" });
+    toast("Workflow deleted.");
+    await loadWorkflows();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function reconcileWorkflows() {
+  try {
+    const data = await request("/api/workflows/sync", { method: "POST" });
+    toast(`Synced ${data.observedJobs} gateway job(s); ${data.drift} drifted.`);
+    appState.workflows = data.items ?? [];
+    renderWorkflows(appState.workflows);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 async function loadSummary() {
   const savedPrincipalId = savedLoginPrincipalId();
   const savedPlatform = savedLoginPlatform();
@@ -1204,6 +1287,12 @@ async function loadSummary() {
     await loadSkills();
   } catch {
     $("skills-result").replaceChildren(emptyState("Sign in required", "Skills are hidden until sign-in."));
+  }
+
+  try {
+    await loadWorkflows();
+  } catch {
+    $("workflows-result").replaceChildren(emptyState("Sign in required", "Scheduled workflows are hidden until sign-in."));
   }
 
   renderSetupChecklist();
@@ -1548,6 +1637,36 @@ $("skill-write-form").addEventListener("submit", async (event) => {
 
 $("refresh-knowledge").addEventListener("click", () => {
   Promise.all([loadMemory(), loadSkills()]).catch((error) => toast(error.message));
+});
+
+$("refresh-workflows").addEventListener("click", () => loadWorkflows().catch((error) => toast(error.message)));
+$("reconcile-workflows").addEventListener("click", () => reconcileWorkflows());
+
+$("workflow-write-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const writeForm = event.currentTarget;
+  const form = new FormData(writeForm);
+  const payload = {
+    name: String(form.get("name") || ""),
+    scheduleKind: String(form.get("scheduleKind") || "cron"),
+    scheduleExpression: String(form.get("scheduleExpression") || "").trim(),
+    targetChannel: String(form.get("targetChannel") || "").trim(),
+    message: String(form.get("message") || ""),
+    enabled: form.get("enabled") !== null,
+  };
+  const timezone = String(form.get("timezone") || "").trim();
+  if (timezone) payload.timezone = timezone;
+  const tools = splitIds(form.get("tools"));
+  if (tools.length) payload.tools = tools;
+  try {
+    const data = await request("/api/workflows", { method: "POST", body: JSON.stringify(payload) });
+    writeForm.reset();
+    toast(`Workflow created: ${data.workflow?.name ?? payload.name}`);
+    reportApply(data.apply);
+    await loadWorkflows();
+  } catch (error) {
+    toast(error.message);
+  }
 });
 
 $("generate-config").addEventListener("click", async () => {

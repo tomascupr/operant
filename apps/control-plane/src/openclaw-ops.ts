@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { redactForPersistence } from "./redaction.js";
 
 export type OpenClawCheckName =
   | "config-validate"
@@ -54,13 +55,32 @@ export type OpenClawUsageCostSnapshot = {
   metadata: Record<string, unknown>;
 };
 
+export type OpenClawObservedCron = {
+  id: string;
+  name: string | null;
+  enabled: boolean | null;
+  metadata: Record<string, unknown>;
+};
+
+// Inputs for materializing a governed scheduled workflow into an OpenClaw cron job.
+export type CronJobSpec = {
+  name: string;
+  scheduleKind: "cron" | "every";
+  scheduleExpression: string;
+  timezone?: string | null;
+  channel: string;
+  message: string;
+  tools?: string[];
+  disabled?: boolean;
+};
+
 const COMMANDS: Record<OpenClawCheckName, string[]> = {
   "config-validate": ["config", "validate", "--json"],
   "security-audit": ["security", "audit", "--json"],
   "channels-status": ["channels", "status", "--probe", "--json"],
   "secrets-reload": ["secrets", "reload", "--json"],
   "approvals-get": ["approvals", "get", "--json", "--gateway"],
-  "cron-status": ["cron", "status"],
+  "cron-status": ["cron", "status", "--json"],
   "tasks-list": ["tasks", "list", "--json"],
   "usage-cost": ["gateway", "usage-cost", "--json"],
   status: ["status", "--all", "--json"],
@@ -95,6 +115,50 @@ export function openClawCheckCommandArgs(check: OpenClawCheckName, params: {
 } = {}): string[] {
   const args = [...COMMANDS[check]];
   return explicitGatewayArgChecks.has(check) ? openClawGatewayCommandArgs(args, params) : args;
+}
+
+// Build `openclaw cron add` args for a governed workflow. The agent's final text is
+// fallback-delivered to the target channel via --announce so a scheduled run actually
+// posts. Gateway --url/--token are appended separately by the caller.
+export function cronAddArgs(spec: CronJobSpec): string[] {
+  const schedule = spec.scheduleKind === "cron" ? ["--cron", spec.scheduleExpression] : ["--every", spec.scheduleExpression];
+  return [
+    "cron",
+    "add",
+    "--json",
+    "--name",
+    spec.name,
+    ...schedule,
+    ...(spec.scheduleKind === "cron" && spec.timezone ? ["--tz", spec.timezone] : []),
+    "--message",
+    spec.message,
+    "--channel",
+    spec.channel,
+    "--announce",
+    ...(spec.tools && spec.tools.length > 0 ? ["--tools", spec.tools.join(",")] : []),
+    ...(spec.disabled ? ["--disabled"] : []),
+  ];
+}
+
+// `openclaw cron <enable|disable|rm|get> <id>`. rm supports --json; the others don't.
+export function cronControlArgs(action: "enable" | "disable" | "rm" | "get", id: string): string[] {
+  return action === "rm" ? ["cron", "rm", "--json", id] : ["cron", action, id];
+}
+
+export function cronListArgs(): string[] {
+  return ["cron", "list", "--all", "--json"];
+}
+
+// Scrub CLI output before it is persisted or returned to a client. The gateway token
+// is passed to the spawned process via env (and --token argv), so a failing CLI could
+// echo it into stderr. redactForPersistence only catches known token *shapes*, so we
+// also replace the live gateway/internal secret values verbatim.
+export function scrubOpenClawOutput(text: string): string {
+  let out = text;
+  for (const secret of [process.env.OPENCLAW_GATEWAY_TOKEN, process.env.OPERANT_INTERNAL_TOKEN]) {
+    if (secret && secret.length >= 8) out = out.split(secret).join("[REDACTED]");
+  }
+  return redactForPersistence(out) as string;
 }
 
 function displayCommand(command: string[]): string[] {
@@ -292,6 +356,41 @@ export function extractOpenClawTaskObservations(json: unknown): OpenClawObserved
     });
   }
   return observed;
+}
+
+// Parse `openclaw cron list --all --json` ({ jobs: [...] }) into a normalized view used
+// to reconcile materialized scheduled workflows. Field names are matched defensively
+// because the cron job shape carries more than we govern; the raw job is preserved as
+// metadata. enabled is null when neither an enabled nor disabled flag is present.
+export function extractOpenClawCronObservations(json: unknown): OpenClawObservedCron[] {
+  const root = toRecord(json);
+  const jobs = Array.isArray(root?.jobs) ? root.jobs : Array.isArray(json) ? json : [];
+  const observed: OpenClawObservedCron[] = [];
+  for (const item of jobs) {
+    const row = toRecord(item);
+    const id = stringValue(row?.id) ?? stringValue(row?.jobId) ?? stringValue(row?.name);
+    if (!row || !id) continue;
+    const enabled = typeof row.enabled === "boolean"
+      ? row.enabled
+      : typeof row.disabled === "boolean"
+        ? !row.disabled
+        : null;
+    observed.push({
+      id,
+      name: stringValue(row.name),
+      enabled,
+      metadata: { source: "openclaw.cron", ...row },
+    });
+  }
+  return observed;
+}
+
+// Pull the gateway-assigned job id out of a `cron add --json` result.
+export function extractCronJobId(json: unknown): string | null {
+  const root = toRecord(json);
+  if (!root) return null;
+  const job = toRecord(root.job);
+  return stringValue(root.id) ?? stringValue(root.jobId) ?? stringValue(job?.id) ?? stringValue(job?.jobId) ?? stringValue(root.name);
 }
 
 export function extractOpenClawUsageCostObservations(json: unknown): {

@@ -46,3 +46,18 @@ test("memory and skills grants follow the governance boundary", () => {
   assert.equal(hasPermission(["integration_admin"], { action: "skills:read", resource: "skill" }), true);
   assert.equal(hasPermission(["integration_admin"], { action: "skills:write", resource: "skill" }), false);
 });
+
+test("scheduled-workflow grants: authoring is owner/admin only, reading is broad", () => {
+  // Authoring a recurring autonomous run is a governance act -> owner/admin only.
+  assert.equal(hasPermission(["owner"], { action: "workflow:write", resource: "workflow" }), true);
+  assert.equal(hasPermission(["admin"], { action: "workflow:write", resource: "workflow" }), true);
+  assert.equal(hasPermission(["integration_admin"], { action: "workflow:write", resource: "workflow" }), false);
+  assert.equal(hasPermission(["member"], { action: "workflow:write", resource: "workflow" }), false);
+  assert.equal(hasPermission(["viewer"], { action: "workflow:write", resource: "workflow" }), false);
+  // Everyone except the billing role can see what is scheduled.
+  assert.equal(hasPermission(["admin"], { action: "workflow:read", resource: "workflow" }), true);
+  assert.equal(hasPermission(["integration_admin"], { action: "workflow:read", resource: "workflow" }), true);
+  assert.equal(hasPermission(["member"], { action: "workflow:read", resource: "workflow" }), true);
+  assert.equal(hasPermission(["viewer"], { action: "workflow:read", resource: "workflow" }), true);
+  assert.equal(hasPermission(["billing_usage_admin"], { action: "workflow:read", resource: "workflow" }), false);
+});

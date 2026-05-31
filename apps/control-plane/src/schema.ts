@@ -324,6 +324,61 @@ export type SkillRecord = {
   updatedAt: string;
 };
 
+// --- Governed scheduled workflows (migration 014) ---
+
+export const scheduleKindSchema = z.enum(["cron", "every"]);
+
+const workflowNameSchema = z.string().trim().min(1).max(120)
+  .regex(/^[A-Za-z0-9 _.:/-]+$/, "Use only letters, numbers, spaces, or _ . : / -");
+const workflowDescriptionSchema = z.string().trim().max(280);
+// Delivery target: an OpenClaw channel id or the literal "last" (most-recent chat).
+const workflowChannelSchema = z.string().trim().min(1).max(256)
+  .regex(/^[A-Za-z0-9_.:@=/-]+$/, "Use a channel id or 'last'");
+const workflowMessageSchema = z.string().trim().min(1).max(4000);
+const workflowTimezoneSchema = z.string().trim().min(1).max(64)
+  .regex(/^[A-Za-z0-9_+\-/:]+$/, "Use an IANA timezone, e.g. Europe/Prague");
+const workflowToolSchema = z.string().trim().min(1).max(80)
+  .regex(/^[A-Za-z0-9_.:*-]+$/, "Use only tool-identifier characters");
+const workflowToolsSchema = z.array(workflowToolSchema).max(30).default([]);
+const scheduleExpressionSchema = z.string().trim().min(1).max(120);
+
+// 5- or 6-field cron (the 6th field is seconds). Each field is digits, '*', '/', ',',
+// '-', or '?'. OpenClaw also accepts --every durations like 10m / 1h / 30s.
+export function isValidCronExpression(value: string): boolean {
+  const fields = value.trim().split(/\s+/);
+  if (fields.length !== 5 && fields.length !== 6) return false;
+  return fields.every((field) => /^[0-9*/,?-]+$/.test(field));
+}
+
+export function isValidEveryDuration(value: string): boolean {
+  return /^\d+(s|m|h|d)$/.test(value.trim());
+}
+
+export const scheduledWorkflowCreateSchema = z.object({
+  name: workflowNameSchema,
+  description: workflowDescriptionSchema.optional(),
+  scheduleKind: scheduleKindSchema,
+  scheduleExpression: scheduleExpressionSchema,
+  timezone: workflowTimezoneSchema.optional(),
+  targetChannel: workflowChannelSchema,
+  message: workflowMessageSchema,
+  tools: workflowToolsSchema,
+  enabled: z.boolean().default(true),
+}).superRefine((value, ctx) => {
+  if (value.scheduleKind === "cron" && !isValidCronExpression(value.scheduleExpression)) {
+    ctx.addIssue({ code: "custom", path: ["scheduleExpression"], message: "Use a 5- or 6-field cron expression" });
+  }
+  if (value.scheduleKind === "every" && !isValidEveryDuration(value.scheduleExpression)) {
+    ctx.addIssue({ code: "custom", path: ["scheduleExpression"], message: "Use a duration like 10m, 1h, or 30s" });
+  }
+});
+export type ScheduledWorkflowCreateInput = z.infer<typeof scheduledWorkflowCreateSchema>;
+
+export const scheduledWorkflowApplySchema = z.object({
+  enabled: z.boolean().optional(),
+});
+export type ScheduledWorkflowApplyInput = z.infer<typeof scheduledWorkflowApplySchema>;
+
 export const policyEvaluationSchema = z.object({
   channelType: z.enum(chatPlatforms).default("slack"),
   slackUserId: slackIdSchema.optional(),

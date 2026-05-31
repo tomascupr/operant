@@ -9,6 +9,11 @@ import { createRateLimiter } from "./rate-limit.js";
 import { createPool, runMigrations, type Database } from "./db.js";
 import { checksumConfig, generateOpenClawConfig, buildSecretRefId, gatewayWebSocketUrl, parseSecretRefId } from "./openclaw-config.js";
 import {
+  cronAddArgs,
+  cronControlArgs,
+  cronListArgs,
+  extractCronJobId,
+  extractOpenClawCronObservations,
   extractOpenClawSessionsObservations,
   extractOpenClawStatusObservations,
   extractOpenClawTaskObservations,
@@ -18,6 +23,8 @@ import {
   openClawGatewayCommandArgs,
   runOpenClawCheck,
   runOpenClawCommand,
+  scrubOpenClawOutput,
+  type CronJobSpec,
 } from "./openclaw-ops.js";
 import { evaluatePolicy, evaluateToolOnly, summarizeApprovalRequirement } from "./policy.js";
 import { createPipedreamConnectClientFromEnv, type PipedreamConnectClient } from "./pipedream.js";
@@ -39,6 +46,8 @@ import {
   pluginPolicyCheckRequestSchema,
   pluginSkillSearchSchema,
   pluginUserContextRequestSchema,
+  scheduledWorkflowApplySchema,
+  scheduledWorkflowCreateSchema,
   skillSearchSchema,
   skillWriteSchema,
   policyIdentifierSchema,
@@ -3406,6 +3415,303 @@ async function handleDeleteSkill(context: RouteContext): Promise<void> {
   sendJson(res, 200, { id });
 }
 
+// --- Governed scheduled workflows (migration 014) ---
+// Operant owns the definition, RBAC, and audit; OpenClaw's cron subsystem executes.
+// Materialization pushes a row into the gateway and is intentionally best-effort: when
+// the control-plane device is not yet approved for cron scopes the gateway returns a
+// pairing error, which we record on the row rather than failing the write — the
+// governed definition stays the source of truth and can be re-applied once paired.
+
+const WORKFLOW_COLUMNS = `id, owner_principal_id, owner_platform, name, description, schedule_kind,
+  schedule_expression, timezone, target_channel, message, tools, enabled, openclaw_cron_id,
+  materialization_status, materialization_error, last_materialized_at, created_at, updated_at`;
+
+function workflowCronParams(workspace: { openclaw_gateway_url?: string | null }) {
+  return {
+    gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN,
+    extraEnv: openClawObservationCommandExtraEnv(workspace),
+    timeoutMs: Number(process.env.OPENCLAW_CHECK_TIMEOUT_MS || 20_000),
+  };
+}
+
+function runWorkflowCron(workspace: { openclaw_gateway_url?: string | null }, baseArgs: string[]) {
+  const params = workflowCronParams(workspace);
+  return runOpenClawCommand(openClawGatewayCommandArgs(baseArgs, params), params);
+}
+
+function workflowSpecFromRow(row: any): CronJobSpec {
+  return {
+    name: row.name,
+    scheduleKind: row.schedule_kind,
+    scheduleExpression: row.schedule_expression,
+    timezone: row.timezone,
+    channel: row.target_channel,
+    message: row.message,
+    tools: row.tools ?? [],
+  };
+}
+
+// (Re)apply a workflow row to the gateway and persist the resulting materialization
+// status. Returns the updated row plus an apply summary for the response/audit.
+async function materializeWorkflow(pool: Queryable, workspace: any, row: any): Promise<{ row: any; apply: { status: string; ok: boolean; command: string[]; exitCode: number | null; stderr: string } }> {
+  let status: "materialized" | "disabled" | "error" | "pending" = "pending";
+  let cronId: string | null = row.openclaw_cron_id ?? null;
+  let errorText: string | null = null;
+  let command: string[] = [];
+  let exitCode: number | null = 0;
+  let stderr = "";
+
+  if (row.enabled) {
+    const result = cronId
+      ? await runWorkflowCron(workspace, cronControlArgs("enable", cronId))
+      : await runWorkflowCron(workspace, cronAddArgs(workflowSpecFromRow(row)));
+    command = result.command;
+    exitCode = result.exitCode;
+    stderr = scrubOpenClawOutput(result.stderr);
+    if (result.exitCode === 0) {
+      status = "materialized";
+      if (!cronId) cronId = extractCronJobId(result.json);
+      errorText = null;
+    } else {
+      status = "error";
+      errorText = scrubOpenClawOutput(result.stderr || result.stdout || "gateway command failed").slice(0, 2000);
+    }
+  } else if (cronId) {
+    const result = await runWorkflowCron(workspace, cronControlArgs("disable", cronId));
+    command = result.command;
+    exitCode = result.exitCode;
+    stderr = scrubOpenClawOutput(result.stderr);
+    if (result.exitCode === 0) {
+      status = "disabled";
+      errorText = null;
+    } else {
+      status = "error";
+      errorText = scrubOpenClawOutput(result.stderr || result.stdout || "gateway command failed").slice(0, 2000);
+    }
+  } else {
+    // Disabled and never materialized: nothing to push, definition stays pending.
+    status = "pending";
+  }
+
+  const updated = await pool.query(
+    `UPDATE scheduled_workflows
+     SET openclaw_cron_id = $2,
+         materialization_status = $3,
+         materialization_error = $4,
+         last_materialized_at = CASE WHEN $3 = 'materialized' THEN now() ELSE last_materialized_at END,
+         updated_at = now()
+     WHERE id = $1
+     RETURNING ${WORKFLOW_COLUMNS}`,
+    [row.id, cronId, status, errorText],
+  );
+  return { row: updated.rows[0] ?? row, apply: { status, ok: exitCode === 0, command, exitCode, stderr: stderr.slice(0, 2000) } };
+}
+
+async function handleListWorkflows(context: RouteContext): Promise<void> {
+  const { res, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "workflow:read", resource: "workflow" });
+  if (!allowed.ok) return;
+  const rows = await state.pool.query(
+    `SELECT ${WORKFLOW_COLUMNS} FROM scheduled_workflows WHERE workspace_id = $1 ORDER BY created_at DESC`,
+    [workspace.id],
+  );
+  sendJson(res, 200, { items: rows.rows });
+}
+
+async function handleCreateWorkflow(context: RouteContext): Promise<void> {
+  const { req, res, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "workflow:write", resource: "workflow" });
+  if (!allowed.ok) return;
+  if (!allowed.actorPrincipalId || !allowed.actorChatPlatform) {
+    sendJson(res, 400, { error: "missing_principal_context" });
+    return;
+  }
+  const input = scheduledWorkflowCreateSchema.parse(await readJson(req));
+  const safe = redactRecordForPersistence({ message: input.message, description: input.description ?? null });
+  let inserted;
+  try {
+    inserted = await state.pool.query(
+      `INSERT INTO scheduled_workflows
+         (workspace_id, owner_principal_id, owner_platform, name, description, schedule_kind, schedule_expression, timezone, target_channel, message, tools, enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING ${WORKFLOW_COLUMNS}`,
+      [
+        workspace.id,
+        allowed.actorPrincipalId,
+        allowed.actorChatPlatform,
+        input.name,
+        safe.description as string | null,
+        input.scheduleKind,
+        input.scheduleExpression,
+        input.timezone ?? null,
+        input.targetChannel,
+        safe.message as string,
+        input.tools,
+        input.enabled,
+      ],
+    );
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { code?: string }).code === "23505") {
+      sendJson(res, 409, { error: "A workflow with that name already exists" });
+      return;
+    }
+    throw error;
+  }
+  const { row, apply } = await materializeWorkflow(state.pool, workspace, inserted.rows[0]);
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "workflow.created",
+    resourceType: "workflow",
+    resourceId: row.id,
+    outcome: apply.ok ? "success" : "failure",
+    metadata: {
+      name: input.name,
+      scheduleKind: input.scheduleKind,
+      scheduleExpression: input.scheduleExpression,
+      targetChannel: input.targetChannel,
+      enabled: input.enabled,
+      materializationStatus: row.materialization_status,
+      source: "dashboard",
+    },
+  });
+  sendJson(res, 201, { workflow: row, apply });
+}
+
+async function handleApplyWorkflow(context: RouteContext): Promise<void> {
+  const { req, res, url, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "workflow:write", resource: "workflow" });
+  if (!allowed.ok) return;
+  const idResult = z.uuid().safeParse(url.pathname.split("/")[3]);
+  if (!idResult.success) {
+    sendJson(res, 400, { error: "Invalid workflow id" });
+    return;
+  }
+  const input = scheduledWorkflowApplySchema.parse(await readJson(req));
+  const existing = await state.pool.query(
+    `SELECT ${WORKFLOW_COLUMNS} FROM scheduled_workflows WHERE id = $1 AND workspace_id = $2`,
+    [idResult.data, workspace.id],
+  );
+  if (!existing.rowCount) {
+    sendJson(res, 404, { error: "Workflow not found" });
+    return;
+  }
+  let current = existing.rows[0];
+  if (typeof input.enabled === "boolean" && input.enabled !== current.enabled) {
+    const flipped = await state.pool.query(
+      `UPDATE scheduled_workflows SET enabled = $2, updated_at = now() WHERE id = $1 RETURNING ${WORKFLOW_COLUMNS}`,
+      [current.id, input.enabled],
+    );
+    current = flipped.rows[0];
+  }
+  const { row, apply } = await materializeWorkflow(state.pool, workspace, current);
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "workflow.applied",
+    resourceType: "workflow",
+    resourceId: row.id,
+    outcome: apply.ok ? "success" : "failure",
+    metadata: { name: row.name, enabled: row.enabled, materializationStatus: row.materialization_status, source: "dashboard" },
+  });
+  sendJson(res, 200, { workflow: row, apply });
+}
+
+async function handleDeleteWorkflow(context: RouteContext): Promise<void> {
+  const { res, url, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "workflow:write", resource: "workflow" });
+  if (!allowed.ok) return;
+  const idResult = z.uuid().safeParse(url.pathname.split("/")[3]);
+  if (!idResult.success) {
+    sendJson(res, 400, { error: "Invalid workflow id" });
+    return;
+  }
+  const deleted = await state.pool.query(
+    `DELETE FROM scheduled_workflows WHERE id = $1 AND workspace_id = $2 RETURNING openclaw_cron_id`,
+    [idResult.data, workspace.id],
+  );
+  if (!deleted.rowCount) {
+    sendJson(res, 404, { error: "Workflow not found" });
+    return;
+  }
+  // The governed row is the source of truth; once it is gone, best-effort remove the
+  // gateway cron job so it stops firing (drift is reconcilable if this push fails).
+  const cronId = deleted.rows[0].openclaw_cron_id;
+  let removal: { command: string[]; exitCode: number | null; stderr: string } | null = null;
+  if (cronId) {
+    const result = await runWorkflowCron(workspace, cronControlArgs("rm", cronId));
+    removal = { command: result.command, exitCode: result.exitCode, stderr: scrubOpenClawOutput(result.stderr).slice(0, 2000) };
+  }
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "workflow.deleted",
+    resourceType: "workflow",
+    resourceId: idResult.data,
+    metadata: { cronRemoved: cronId ? removal?.exitCode === 0 : null, source: "dashboard" },
+  });
+  sendJson(res, 200, { id: idResult.data, cronRemoval: removal });
+}
+
+// Reconcile governed workflows against the live `openclaw cron list`: a materialized row
+// whose gateway job is gone is flagged 'drift'; a present job's enabled state is mirrored.
+async function handleReconcileWorkflows(context: RouteContext): Promise<void> {
+  const { res, state } = context;
+  const workspace = await getWorkspace(state.pool);
+  const allowed = await requirePermissionForWorkspace(context, workspace, { action: "workflow:read", resource: "workflow" });
+  if (!allowed.ok) return;
+  const result = await runWorkflowCron(workspace, cronListArgs());
+  if (result.exitCode !== 0 || !result.json) {
+    sendJson(res, 502, { error: "OpenClaw cron list failed", command: result.command, exitCode: result.exitCode, stderr: scrubOpenClawOutput(result.stderr).slice(0, 2000) });
+    return;
+  }
+  const observed = new Map(extractOpenClawCronObservations(result.json).map((job) => [job.id, job]));
+  const rows = await state.pool.query(
+    `SELECT ${WORKFLOW_COLUMNS} FROM scheduled_workflows WHERE workspace_id = $1 AND openclaw_cron_id IS NOT NULL`,
+    [workspace.id],
+  );
+  let reconciled = 0;
+  let drift = 0;
+  for (const row of rows.rows) {
+    const job = observed.get(row.openclaw_cron_id);
+    const status = !job ? "drift" : job.enabled === false ? "disabled" : "materialized";
+    if (status === "drift") drift += 1;
+    await state.pool.query(
+      `UPDATE scheduled_workflows SET materialization_status = $2, updated_at = now() WHERE id = $1`,
+      [row.id, status],
+    );
+    reconciled += 1;
+  }
+  await audit(state.pool, {
+    companyId: workspace.company_id,
+    workspaceId: workspace.id,
+    actorUserId: allowed.actorUserId,
+    actorSlackUserId: allowed.actorSlackUserId,
+    actorTeamsAadUserId: allowed.actorTeamsAadUserId,
+    eventType: "workflow.reconciled",
+    resourceType: "workflow",
+    metadata: { observedJobs: observed.size, reconciled, drift, source: "dashboard" },
+  });
+  const fresh = await state.pool.query(
+    `SELECT ${WORKFLOW_COLUMNS} FROM scheduled_workflows WHERE workspace_id = $1 ORDER BY created_at DESC`,
+    [workspace.id],
+  );
+  sendJson(res, 200, { ok: true, observedJobs: observed.size, reconciled, drift, items: fresh.rows });
+}
+
 async function handlePluginMemoryWrite({ req, res, state }: RouteContext): Promise<void> {
   if (!isAuthorizedInternalRequest(req)) {
     sendJson(res, 401, { error: "Unauthorized" });
@@ -4068,6 +4374,11 @@ async function route(context: RouteContext): Promise<void> {
   if (req.method === "GET" && url.pathname === "/api/skills") return handleListSkills(context);
   if (req.method === "POST" && url.pathname === "/api/skills") return handleUpsertSkill(context);
   if (req.method === "DELETE" && /^\/api\/skills\/[^/]+$/.test(url.pathname)) return handleDeleteSkill(context);
+  if (req.method === "GET" && url.pathname === "/api/workflows") return handleListWorkflows(context);
+  if (req.method === "POST" && url.pathname === "/api/workflows") return handleCreateWorkflow(context);
+  if (req.method === "POST" && url.pathname === "/api/workflows/sync") return handleReconcileWorkflows(context);
+  if (req.method === "POST" && /^\/api\/workflows\/[^/]+\/apply$/.test(url.pathname)) return handleApplyWorkflow(context);
+  if (req.method === "DELETE" && /^\/api\/workflows\/[^/]+$/.test(url.pathname)) return handleDeleteWorkflow(context);
   if (req.method === "GET" && url.pathname.startsWith("/internal/openclaw/secrets/")) return handleSecret(context);
   if (req.method === "POST" && url.pathname === "/internal/openclaw/events") return handleOpenClawEvent(context);
   if (req.method === "POST" && url.pathname === "/internal/plugin/user-context") return handlePluginUserContext(context);

@@ -472,20 +472,24 @@ export function runOpenClawCommand(args: string[], params: {
         command,
         exitCode: 127,
         timedOut,
-        stdout,
-        stderr: `${stderr}${error instanceof Error ? error.message : String(error)}`,
+        stdout: scrubOpenClawOutput(stdout),
+        stderr: scrubOpenClawOutput(`${stderr}${error instanceof Error ? error.message : String(error)}`),
         json: null,
       });
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
+      // Parse JSON from the raw stdout, then scrub the string fields. The gateway token
+      // can leak into stdout/stderr on failure, so the runner owns redaction for every
+      // caller; json stays the parsed structured data (no consumer re-parses the string).
+      const json = parseJsonFromOutput(stdout);
       resolve({
         command,
         exitCode,
         timedOut,
-        stdout,
-        stderr,
-        json: parseJsonFromOutput(stdout),
+        stdout: scrubOpenClawOutput(stdout),
+        stderr: scrubOpenClawOutput(stderr),
+        json,
       });
     });
   });

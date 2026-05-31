@@ -4,7 +4,12 @@ import type { RoleName, WorkspaceRecord } from "./schema.js";
 
 type Queryable = Pick<Database, "query">;
 
-export async function ensureDefaultWorkspace(pool: Queryable): Promise<WorkspaceRecord> {
+// `seed` reseeds built-in roles/permissions for an existing workspace. It runs at boot
+// and on bootstrap only; the per-request getWorkspace path leaves it false so we do not
+// re-issue ~25 permission upserts plus role_permissions churn on every API call (which
+// also caused grant flapping when rolling-deploy replicas reseeded concurrently). A
+// brand-new workspace is always seeded so its roles exist before first use.
+export async function ensureDefaultWorkspace(pool: Queryable, options: { seed?: boolean } = {}): Promise<WorkspaceRecord> {
   const existing = await pool.query(
     `SELECT w.id AS workspace_id, w.company_id
      FROM workspaces w
@@ -12,7 +17,7 @@ export async function ensureDefaultWorkspace(pool: Queryable): Promise<Workspace
      LIMIT 1`,
   );
   if (existing.rowCount) {
-    await seedRolesAndPermissions(pool, existing.rows[0].company_id);
+    if (options.seed) await seedRolesAndPermissions(pool, existing.rows[0].company_id);
     return {
       companyId: existing.rows[0].company_id,
       workspaceId: existing.rows[0].workspace_id,

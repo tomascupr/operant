@@ -1292,7 +1292,7 @@ async function main() {
   ]);
   await patternCheck("security", "workspace bootstrap transactional seed", "apps/control-plane/src/server.ts", [
     ["bootstrap transaction begin", /handleBootstrap[\s\S]*await client\.query\("BEGIN"\)/],
-    ["bootstrap seed in transaction", /handleBootstrap[\s\S]*ensureDefaultWorkspace\(client\)/],
+    ["bootstrap seed in transaction", /handleBootstrap[\s\S]*ensureDefaultWorkspace\(client, \{ seed: true \}\)/],
     ["bootstrap audit in transaction", /handleBootstrap[\s\S]*eventType: "bootstrap\.completed"[\s\S]*await client\.query\("COMMIT"\)/],
     ["bootstrap transaction rollback", /handleBootstrap[\s\S]*await client\.query\("ROLLBACK"\)\.catch/],
     ["workspace lookup explicit columns", /SELECT w\.id, w\.company_id, w\.name, w\.slack_team_id, w\.teams_app_id, w\.teams_tenant_id,[\s\S]*w\.msteams_webhook_port, w\.msteams_webhook_path,[\s\S]*w\.openclaw_gateway_url, w\.openclaw_config_path, w\.created_at, c\.name AS company_name/],

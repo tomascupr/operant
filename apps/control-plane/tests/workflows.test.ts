@@ -28,6 +28,7 @@ function createFakePool(handler: (sql: string, params: unknown[]) => QueryResult
 }
 
 function seedQueries(sql: string, params: unknown[]): QueryResult | null {
+  if (/^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) return result();
   if (/SELECT w\.id AS workspace_id/.test(sql)) return result([{ workspace_id: workspaceId, company_id: companyId }]);
   if (/INSERT INTO permissions/.test(sql)) return result();
   if (/INSERT INTO roles/.test(sql)) return result([{ id: `role-${String(params[1] || "unknown")}` }]);
@@ -366,7 +367,7 @@ test("POST /api/workflows/sync flags a vanished gateway job as drift", async () 
       assert.ok(statuses.includes("drift"));
       // On drift the stale gateway id must be cleared so a later apply re-adds a fresh job.
       assert.ok(
-        calls.some((c) => /UPDATE scheduled_workflows[\s\S]*openclaw_cron_id = CASE WHEN \$2 = 'drift'/.test(c.sql)),
+        calls.some((c) => /UPDATE scheduled_workflows[\s\S]*openclaw_cron_id = CASE WHEN \$3/.test(c.sql)),
         "drift reconcile must clear the stale openclaw_cron_id",
       );
     });
@@ -426,7 +427,7 @@ test("POST /api/workflows/:id/apply re-materializes a drifted workflow by re-add
   const stub = writeStubCli();
   const updates: unknown[][] = [];
   const auditRows: unknown[][] = [];
-  const { pool } = createFakePool((sql, params) => {
+  const { calls, pool } = createFakePool((sql, params) => {
     const seeded = seedQueries(sql, params);
     if (seeded) return seeded;
     const rbac = rbacHeaderActor(sql, OWNER);
@@ -457,6 +458,10 @@ test("POST /api/workflows/:id/apply re-materializes a drifted workflow by re-add
       assert.equal((res.body.apply as Record<string, unknown>).status, "materialized");
       assert.equal(updates[0][1], "cron-job-1");
       assert.ok(auditRows.some((row) => row[5] === "workflow.applied"));
+      assert.ok(
+        calls.some((c) => /FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2 FOR UPDATE/.test(c.sql)),
+        "apply must lock the row with SELECT ... FOR UPDATE",
+      );
     });
   });
 });
@@ -518,18 +523,69 @@ test("POST /api/workflows/:id/apply returns 404 for an unknown workflow", async 
   });
 });
 
-test("DELETE /api/workflows/:id removes the row and audits workflow.deleted", async () => {
-  const stub = writeStubCli();
-  const auditRows: unknown[][] = [];
-  let deleted = false;
+// A stub whose `cron list` reports the job as disabled, to exercise intent-mismatch drift.
+function writeStubCliDisabledJob(): string {
+  const dir = mkdtempSync(join(tmpdir(), "operant-cron-disabled-"));
+  const path = join(dir, "openclaw-disabled.mjs");
+  writeFileSync(path, [
+    "#!/usr/bin/env node",
+    "const a = process.argv.slice(2);",
+    "if (a[0] === 'cron' && a[1] === 'list') process.stdout.write(JSON.stringify({ jobs: [{ id: 'cron-job-1', name: 'daily-standup', enabled: false }], total: 1 }));",
+    "else process.stdout.write('{}');",
+    "process.exit(0);",
+    "",
+  ].join("\n"));
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("POST /api/workflows/sync flags an enabled-state mismatch as drift without clearing the id", async () => {
+  const stub = writeStubCliDisabledJob();
+  const statusUpdates: unknown[][] = [];
   const { pool } = createFakePool((sql, params) => {
     const seeded = seedQueries(sql, params);
     if (seeded) return seeded;
     const rbac = rbacHeaderActor(sql, OWNER);
     if (rbac) return rbac;
-    if (/DELETE FROM scheduled_workflows[\s\S]*RETURNING openclaw_cron_id/.test(sql)) {
-      deleted = true;
+    if (/SELECT[\s\S]*FROM scheduled_workflows WHERE workspace_id = \$1 AND openclaw_cron_id IS NOT NULL/.test(sql)) {
+      // Operant intends enabled=true, but the gateway job is disabled -> intent mismatch.
+      return result([workflowRow({ openclaw_cron_id: "cron-job-1", enabled: true, materialization_status: "materialized" })]);
+    }
+    if (/UPDATE scheduled_workflows[\s\S]*materialization_status = \$2/.test(sql)) {
+      statusUpdates.push(params);
+      return result();
+    }
+    if (/SELECT[\s\S]*FROM scheduled_workflows WHERE workspace_id = \$1 ORDER BY created_at DESC/.test(sql)) return result([]);
+    if (/INSERT INTO audit_logs/.test(sql)) return result();
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true", OPENCLAW_CLI_COMMAND: stub }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, "/api/workflows/sync", { method: "POST", headers: { "x-operant-slack-user-id": "UOWNER" } });
+      assert.equal(res.response.status, 200);
+      assert.equal(res.body.drift, 1);
+      assert.equal(statusUpdates[0][1], "drift");
+      assert.equal(statusUpdates[0][2], false, "present-but-mismatched job keeps its id (jobMissing=false)");
+    });
+  });
+});
+
+test("DELETE /api/workflows/:id removes the gateway job first, then the row, and audits workflow.deleted", async () => {
+  const stub = writeStubCli();
+  const auditRows: unknown[][] = [];
+  let deleted = false;
+  const { calls, pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/SELECT openclaw_cron_id FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
       return result([{ openclaw_cron_id: "cron-job-1" }]);
+    }
+    if (/DELETE FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      deleted = true;
+      return result([{}]);
     }
     if (/INSERT INTO audit_logs/.test(sql)) {
       auditRows.push(params);
@@ -545,6 +601,79 @@ test("DELETE /api/workflows/:id removes the row and audits workflow.deleted", as
       assert.equal(res.body.id, workflowId);
       assert.ok(deleted);
       assert.ok(auditRows.some((row) => row[5] === "workflow.deleted"));
+      assert.ok(
+        calls.some((c) => /SELECT openclaw_cron_id FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2 FOR UPDATE/.test(c.sql)),
+        "delete must lock the row with SELECT ... FOR UPDATE so it serializes against apply",
+      );
+    });
+  });
+});
+
+test("DELETE /api/workflows/:id deletes a never-materialized workflow without calling the gateway", async () => {
+  const auditRows: unknown[][] = [];
+  let deleted = false;
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/SELECT openclaw_cron_id FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      return result([{ openclaw_cron_id: null }]);
+    }
+    if (/DELETE FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      deleted = true;
+      return result([{}]);
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) {
+      auditRows.push(params);
+      return result();
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  // A CLI that would throw if invoked, proving the gateway is never called for a null cron id.
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true", OPENCLAW_CLI_COMMAND: "operant-nonexistent-cli-must-not-run" }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, `/api/workflows/${workflowId}`, { method: "DELETE", headers: { "x-operant-slack-user-id": "UOWNER" } });
+      assert.equal(res.response.status, 200);
+      assert.equal(res.body.cronRemoval, null);
+      assert.ok(deleted);
+      assert.ok(auditRows.some((row) => row[5] === "workflow.deleted"));
+    });
+  });
+});
+
+test("DELETE /api/workflows/:id retains the row (does not orphan the job) when gateway cron rm fails", async () => {
+  const stub = writeLeakyStubCli(); // exits 1
+  const updates: unknown[][] = [];
+  let deleted = false;
+  const { pool } = createFakePool((sql, params) => {
+    const seeded = seedQueries(sql, params);
+    if (seeded) return seeded;
+    const rbac = rbacHeaderActor(sql, OWNER);
+    if (rbac) return rbac;
+    if (/SELECT openclaw_cron_id FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      return result([{ openclaw_cron_id: "cron-job-1" }]);
+    }
+    if (/DELETE FROM scheduled_workflows WHERE id = \$1 AND workspace_id = \$2/.test(sql)) {
+      deleted = true;
+      return result([{}]);
+    }
+    if (/UPDATE scheduled_workflows SET materialization_status = 'error'/.test(sql)) {
+      updates.push(params);
+      return result();
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) return result();
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  await withEnv({ OPERANT_ALLOW_HEADER_AUTH: "true", OPENCLAW_CLI_COMMAND: stub, OPENCLAW_GATEWAY_TOKEN: "tok" }, async () => {
+    await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+      const res = await requestJson(baseUrl, `/api/workflows/${workflowId}`, { method: "DELETE", headers: { "x-operant-slack-user-id": "UOWNER" } });
+      assert.equal(res.response.status, 502);
+      assert.equal(deleted, false, "row must be retained when gateway removal fails");
+      assert.equal(updates.length, 1, "row is marked error for retry");
+      assert.match(String(updates[0][1]), /\S/);
     });
   });
 });

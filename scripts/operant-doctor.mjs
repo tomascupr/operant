@@ -306,8 +306,10 @@ function parseEnv(source) {
 
 function decodesTo32Bytes(value) {
   const trimmed = value.trim();
+  // Mirror secrets.ts parseMasterKey: only treat the input as base64 when the whole string
+  // is valid base64, so this preflight agrees with what the server accepts at boot.
   const candidates = [
-    Buffer.from(trimmed, "base64"),
+    /^[A-Za-z0-9+/]+={0,2}$/.test(trimmed) ? Buffer.from(trimmed, "base64") : Buffer.alloc(0),
     /^[a-f0-9]{64}$/i.test(trimmed) ? Buffer.from(trimmed, "hex") : Buffer.alloc(0),
     Buffer.from(trimmed, "utf8"),
   ];

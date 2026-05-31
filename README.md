@@ -1,10 +1,13 @@
 # Operant
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/tag/tomascupr/operant?label=release&sort=semver&color=success)](https://github.com/tomascupr/operant/releases)
 [![verify](https://github.com/tomascupr/operant/actions/workflows/verify.yml/badge.svg)](https://github.com/tomascupr/operant/actions/workflows/verify.yml)
 [![Node 24](https://img.shields.io/badge/node-24%2B-brightgreen)](package.json)
+[![Stars](https://img.shields.io/github/stars/tomascupr/operant?style=flat&color=yellow)](https://github.com/tomascupr/operant/stargazers)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Self-hosted agents in Slack and Microsoft Teams, with self-serve OAuth to 3,000+ tools.**
+**The MIT-licensed, self-hosted control plane for AI agents in Slack and Microsoft Teams: every action runs as the human who asked, not a shared bot, with per-user OAuth to 3,000+ tools.**
 
 Hosted agents share one bot identity across your whole company. Every
 employee's actions land in the audit log under "the workspace did it."
@@ -72,6 +75,22 @@ governs and audits that access; it does not store those tokens. See
 credentials can also be stored encrypted in your Postgres, scoped to the
 workspace or to a specific Slack user.
 
+## How Operant compares
+
+Most teams reach for one of three options to put an agent in Slack or
+Teams. Here is where Operant sits.
+
+| | Hosted agent (SaaS bot) | Raw OpenClaw on its own | Operant |
+| --- | --- | --- | --- |
+| Self-hostable | No | Yes | Yes |
+| License | Proprietary | Permissive | MIT |
+| Who the tool call runs as | One shared bot identity | Runtime default | The requesting human's own OAuth connection |
+| Per-human audit | Workspace-level | Session-level | Every session, policy decision, and tool call names the person who triggered it |
+| RBAC + custom roles | Vendor-defined tiers | Not built in | Six built-in roles plus arbitrary `(action, resource)` grants |
+| Named-approver gates | Varies | Not built in | Per app/action, with minimum-approval rules |
+| Slack and Teams as one identity | Per-product | Per-channel plugin | Dual-identity: one person, one policy and audit trail across both |
+| Credentials | Vendor-held | Your config files | BYOK, AES-256-GCM encrypted in your Postgres |
+
 ## Why Operant
 
 - **Connect tools yourself.** The dashboard has an Integrations marketplace
@@ -105,7 +124,7 @@ workspace or to a specific Slack user.
   and audit-attested, with team/private isolation enforced server-side.
   Complementary to OpenClaw's native memory plugin: the Operant store is
   the governed, attestable path agents reach through the
-  `operant_memory_*` and `operant_skills_*` tools.
+  `operant_memory_*` and `operant_skills_search` tools.
 - Governed scheduled workflows: define recurring agent runs (cron or
   interval) that Operant owns, RBAC-gates (authoring is owner/admin only),
   and audits, then materializes into OpenClaw's cron for execution.
@@ -133,6 +152,36 @@ workspace or to a specific Slack user.
 
 *Above: a live Operant deployment (branded as @DuvoClaw inside
 [Duvo](https://duvo.ai)) running real production conversations.*
+
+## Roadmap
+
+Operant ships in small, governed increments. Recent releases:
+
+- **v0.5** Governed scheduled workflows: recurring agent runs that Operant
+  authors, RBAC-gates, and audits, then materializes into OpenClaw cron.
+- **v0.4** Governed team memory and admin-curated skill definitions,
+  RBAC-gated and audit-attested.
+- **v0.3** Microsoft Teams as a first-class dual-identity platform alongside
+  Slack.
+
+Full history in the [changelog](CHANGELOG.md). Under consideration, not yet
+committed: pgvector-backed semantic memory/skill search, executable skills
+and tool-chains, OpenClaw skill-file materialization, and proactive
+suggestions.
+
+## Contributing
+
+Operant is MIT-licensed and built in the open. If it is useful to you, a
+[GitHub star](https://github.com/tomascupr/operant/stargazers) helps others
+find it.
+
+- New here? Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** for local dev,
+  the verify gauntlet (`pnpm verify`), and PR expectations.
+- Found a bug or have an idea? [Open an issue](https://github.com/tomascupr/operant/issues);
+  [`good first issue`](https://github.com/tomascupr/operant/labels/good%20first%20issue)
+  and [`help wanted`](https://github.com/tomascupr/operant/labels/help%20wanted)
+  are good entry points.
+- Security report? See **[SECURITY.md](SECURITY.md)** and disclose privately.
 
 ## Docs
 

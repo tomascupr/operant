@@ -19,3 +19,14 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Chat platform
+      options:
+        - Slack
+        - Microsoft Teams
+        - Both
+        - Not platform-specific
+    validations:
+      required: true

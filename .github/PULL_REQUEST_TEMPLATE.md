@@ -12,6 +12,8 @@ Closes #
 - [ ] Any new migration is append-only (`apps/control-plane/migrations/NNN_*.sql`, next number; no rewrites of applied migrations)
 - [ ] Dashboard changes stay vanilla JS with no external scripts or bundler (strict same-origin CSP preserved)
 - [ ] No secrets, real Slack/Teams tokens, or production credentials in the diff
+- [ ] If you touched `scripts/`, the CLI stays self-testable and `pnpm verify:scripts` passes (`node --check` + `--self-test-*`)
+- [ ] If you changed policy or chat-platform code, both Slack and Teams (dual-identity) cases are covered
 
 ## Notes for reviewers
 

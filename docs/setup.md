@@ -84,17 +84,20 @@ Use the dashboard tabs left to right for a first deployment:
    review.
 5. **People**: add Slack users, assign built-in or custom roles, and create
    custom action/resource permission pairs.
-6. **Knowledge**: search and manage team memory entries and admin-curated skill
+6. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
+   sessions/jobs, audit rows, usage events, a daily cost trend, and
+   per-user, per-model, and per-tool cost breakdowns.
+7. **Data** and **OpenClaw**: run export, wipe, retention purge, config
+   generation, observation sync, and OpenClaw checks only after confirming the
+   dashboard dialog for each high-risk action.
+8. **Knowledge**: search and manage team memory entries and admin-curated skill
    definitions. Memory entries are private by default (visible only to the
    owner) or shared as team-visible (visible to all workspace members). Skills
    are workspace-shared procedures that admins define; agents retrieve them via
    the operant_skills_search tool. Both are RBAC-gated and audit-attested.
-7. **Approvals**, **Activity**, and **Usage**: inspect pending decisions,
-   sessions/jobs, audit rows, usage events, a daily cost trend, and
-   per-user, per-model, and per-tool cost breakdowns.
-8. **Data** and **OpenClaw**: run export, wipe, retention purge, config
-   generation, observation sync, and OpenClaw checks only after confirming the
-   dashboard dialog for each high-risk action.
+9. **Workflows**: author governed recurring agent runs (cron or interval).
+   Operant owns the definition, RBAC (authoring is owner/admin only), and audit;
+   OpenClaw cron executes. See "Scheduled workflows" below.
 
 Use **Integration Credentials** on the Data tab for customer-owned API/tool
 secrets. Secret values are write-only in the browser; saved rows show masked
@@ -362,6 +365,29 @@ If you saw `unknown requestId` errors on older releases, that was the
 2026.5.12 rotating-request-ID bug. The default `OPENCLAW_VERSION` is now
 `2026.5.18`, where each `devices list` / `devices approve` round-trip uses
 a stable request ID and the documented flow works as written.
+
+## Scheduled Workflows
+
+Operant can author governed recurring agent runs and materialize them into
+OpenClaw's cron subsystem: Operant owns the definition, RBAC, and audit;
+OpenClaw executes. Use the dashboard **Workflows** tab (or the `/api/workflows*`
+endpoints) to create a workflow with a name, an optional description, a `cron`
+or `every` schedule, a target channel, and the message the agent should run.
+
+- Authoring is owner/admin-only (`workflow:write`); every role except
+  `billing_usage_admin` can read (`workflow:read`). A `timezone` applies to
+  `cron` schedules only.
+- Creating or applying a workflow runs `openclaw cron add|enable|disable` against
+  the gateway. This needs the same operator device-pairing as the checks above,
+  with the gateway's cron write-scopes approved.
+- Materialization is **fails-soft**: if the control-plane device is not yet
+  approved for cron scopes, the row is saved with `materialization_status="error"`
+  and a scrubbed error rather than failing the request. Re-run **Apply** once the
+  device is paired. The governed definition stays the source of truth either way.
+- **Sync** reconciles each materialized row against `openclaw cron list`. A
+  vanished gateway job is flagged `drift` and its stale id is cleared, so a later
+  **Apply** re-adds a fresh job. Cron run history surfaces through the existing
+  jobs mirror (cron-originated tasks carry `runtime: "cron"`).
 
 ## Integration Credentials
 

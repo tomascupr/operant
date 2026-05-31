@@ -90,13 +90,13 @@ parse their output back.
 | GET    | `/api/openclaw/checks`                     | session | Index of available operator checks: `status`, `doctor`, `security-audit`, etc.   |
 | POST   | `/api/openclaw/checks/<name>`              | session | Run an OpenClaw operator check by name. Output parsed into JSON when possible.   |
 | POST   | `/api/openclaw/observations/sync`          | session | Pull sessions/tasks/usage from OpenClaw and mirror into Operant tables.          |
-| GET    | `/api/pipedream/diagnostics`               | session | Validate the five `PIPEDREAM_*` env vars and report OAuth/MCP reachability.      |
+| GET    | `/api/pipedream/diagnostics`               | session | Validate the five Pipedream env vars and report OAuth/MCP reachability.          |
 
 ## Policy
 
 Order of evaluation: DM allowlist → channel policy → tool policy
-(`tool`, `action`, optional `slackUserIds`/`roleNames` principals) →
-approvals. Explicit `deny` beats `approval_required` beats `allow`.
+(`tool`, `action`, optional `slackUserIds`/`teamsAadUserIds`/`roleNames`
+principals) → approvals. Explicit `deny` beats `approval_required` beats `allow`.
 
 | Method | Path                     | Auth    | Purpose                                                          |
 | ------ | ------------------------ | ------- | ---------------------------------------------------------------- |
@@ -159,7 +159,7 @@ and can be re-applied once paired.
 | Method | Path                       | Auth                | Purpose                                                                                                       |
 | ------ | -------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
 | GET    | `/api/workflows`           | session (`workflow:read`)  | List scheduled workflows for the workspace.                                                            |
-| POST   | `/api/workflows`           | session (`workflow:write`, owner/admin only) | Create a workflow. Body `{name, scheduleKind:"cron"\|"every", scheduleExpression, timezone?, targetChannel, message, tools?, enabled?}`. 201 with `{workflow, apply}`; 409 on duplicate name. |
+| POST   | `/api/workflows`           | session (`workflow:write`, owner/admin only) | Create a workflow. Body `{name, description?, scheduleKind:"cron"\|"every", scheduleExpression, timezone?, targetChannel, message, tools?, enabled?}` (`timezone` is cron-only). 201 with `{workflow, apply}`; 409 on duplicate name. |
 | POST   | `/api/workflows/<id>/apply`| session (`workflow:write`, owner/admin only) | Optionally set `{enabled}`, then (re)materialize into OpenClaw cron. Returns `{workflow, apply}`.       |
 | POST   | `/api/workflows/sync`      | session (`workflow:read`)  | Reconcile materialized rows against `openclaw cron list`; a vanished job is flagged `drift`.            |
 | DELETE | `/api/workflows/<id>`      | session (`workflow:write`, owner/admin only) | Delete a workflow and best-effort remove its OpenClaw cron job.                                        |

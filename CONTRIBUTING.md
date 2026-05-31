@@ -11,6 +11,19 @@ fixes, feature work, docs, and packaging improvements.
 - For substantial features, open a draft PR early and reference the issue.
   We will not silently merge controversial designs.
 
+## Where to start
+
+New here? Two good on-ramps:
+
+- Issues tagged [`good first issue`](https://github.com/tomascupr/operant/labels/good%20first%20issue)
+  are scoped to be safe and self-contained;
+  [`help wanted`](https://github.com/tomascupr/operant/labels/help%20wanted)
+  issues are larger but up for grabs.
+- If nothing is tagged yet, the lowest-friction first changes are docs under
+  `docs/`, a new `--self-test-*` case in a `scripts/*.mjs` CLI, or a `node:test`
+  case under `apps/control-plane/tests/`. The highest-blast-radius areas are
+  `server.ts` routing, the policy/RBAC engine, and migrations.
+
 ## Local setup
 
 ```bash
@@ -25,6 +38,16 @@ pnpm doctor
 The full developer gauntlet is `pnpm verify`. It additionally requires a
 host PostgreSQL 17 toolchain (`initdb`, `postgres`, `psql`) and Google
 Chrome on macOS, or `CHROME_PATH` set to a Chromium-flavored binary.
+
+`pnpm test` builds first, then runs Node's test runner against compiled JS in
+`dist/`. If you run `node --test` directly, rebuild first or your edits will not
+be picked up:
+
+```bash
+pnpm --filter @operant/control-plane build
+node --test apps/control-plane/dist/tests/policy.test.js                              # one file
+node --test --test-name-pattern="<regex>" apps/control-plane/dist/tests/policy.test.js  # one test
+```
 
 ## What we expect in a PR
 

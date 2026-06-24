@@ -9,7 +9,9 @@
 
 **The MIT-licensed, self-hosted control plane for AI agents in Slack and Microsoft Teams: every action runs as the human who asked, not a shared bot, with per-user OAuth to 3,000+ tools.**
 
-Hosted agents share one bot identity across your whole company. Every
+Hosted agents — now including Anthropic's
+[Claude Tag](https://www.anthropic.com/news/introducing-claude-tag) — put
+one shared Claude in your channels that acts for everyone. Every
 employee's actions land in the audit log under "the workspace did it."
 Operant doesn't. Each person finds the app they need, connects their own
 Gmail, Notion, GitHub, Linear, HubSpot, or other Pipedream account, and
@@ -90,6 +92,34 @@ Teams. Here is where Operant sits.
 | Named-approver gates | Varies | Not built in | Per app/action, with minimum-approval rules |
 | Slack and Teams as one identity | Per-product | Per-channel plugin | Dual-identity: one person, one policy and audit trail across both |
 | Credentials | Vendor-held | Your config files | BYOK, AES-256-GCM encrypted in your Postgres |
+
+### Operant vs Claude Tag
+
+Anthropic's [Claude Tag](https://www.anthropic.com/news/introducing-claude-tag)
+(June 2026) is the canonical hosted agent: one always-on Claude per Slack
+channel, shared by the whole team, running on Anthropic's cloud. It is the
+fastest way to get an AI teammate into Slack. Operant is the self-hosted,
+governed alternative for teams that can't ship their channel and tool data
+to a vendor, or that need per-person identity, model choice, and policy.
+
+| | Claude Tag | Operant |
+| --- | --- | --- |
+| Where it runs | Anthropic-hosted SaaS | Self-hosted in your own infrastructure |
+| License | Proprietary | MIT, open source |
+| Model | Opus 4.8 only | BYOK — any model (Anthropic, OpenAI, …) |
+| In-channel identity | One shared Claude acts for everyone | Every action runs as the human who asked |
+| Tool access | Sources connected to the shared agent | Each person's own per-user OAuth to 3,000+ tools |
+| Platforms | Slack today (Teams planned) | Slack and Teams today, one identity across both |
+| Governance | Admin tool/data scopes, spend limits, activity logs | RBAC + custom roles, named-approver gates, channel/tool/approval policy, retention export and wipe |
+| Where your data lives | Channel history and learned memory in Anthropic's cloud | Your Postgres, inside your trust boundary, AES-256-GCM at rest |
+| Autonomy | Ambient mode acts proactively across the org | Work runs when asked; risky actions gate on policy and named approvers |
+| Access | Enterprise/Team contract; auto-migrates from Claude in Slack on Aug 3, 2026 | Free; clone and run |
+
+**Pick Claude Tag** if you are all-in on Anthropic, want zero-ops, and are
+comfortable with Anthropic holding your Slack and tool data. **Pick Operant**
+if you need to self-host, want every action attributed to a real person,
+want to choose your own model, or need RBAC, approvals, and retention you
+control.
 
 ## Why Operant
 

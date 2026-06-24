@@ -1,0 +1,74 @@
+name: release
+
+# Publishes the official Operant container images to GHCR on every version tag.
+# Triggered by `git push --follow-tags` from the documented release flow
+# (see CONTRIBUTING.md). Also runnable manually for a dry build of any ref.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # OpenClaw runtime pinned to match docker-compose.yml's default.
+  OPENCLAW_VERSION: "2026.5.18"
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The control plane has no native-arch base constraint, so it ships
+          # multi-arch (Apple Silicon, Graviton, Pi all get a native image).
+          - name: control-plane
+            dockerfile: apps/control-plane/Dockerfile
+            platforms: linux/amd64,linux/arm64
+          # The gateway FROMs the upstream OpenClaw image; keep it to the arch
+          # that base publishes (amd64). It still runs on arm64 via emulation.
+          - name: openclaw-gateway
+            dockerfile: deploy/openclaw/Dockerfile.gateway
+            platforms: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/operant/${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=sha,enable=${{ github.ref_type != 'tag' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            OPENCLAW_VERSION=${{ env.OPENCLAW_VERSION }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

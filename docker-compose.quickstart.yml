@@ -1,0 +1,92 @@
+# Pull-based quickstart stack — no source checkout, no local build.
+# Boots Postgres + the Operant control plane + the OpenClaw gateway from the
+# official GHCR images. `install.sh` writes the .env this expects and fetches
+# the one bind-mounted file (operant-secret-resolver.mjs) alongside it.
+#
+#   curl -fsSL https://raw.githubusercontent.com/tomascupr/operant/v0.6.0/install.sh | bash
+#
+# For the full from-source workflow (dev, sandbox overlay, live acceptance) use
+# docker-compose.yml instead.
+name: ${OPERANT_COMPOSE_PROJECT_NAME:-operant}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: operant
+      POSTGRES_USER: operant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - operant-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U operant -d operant"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  policy-audit:
+    image: ghcr.io/tomascupr/operant/control-plane:${OPERANT_VERSION:-latest}
+    pull_policy: missing
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      OPERANT_SECRET_KEY: ${OPERANT_SECRET_KEY:?set OPERANT_SECRET_KEY in .env}
+      OPERANT_INTERNAL_TOKEN: ${OPERANT_INTERNAL_TOKEN:?set OPERANT_INTERNAL_TOKEN in .env}
+      OPERANT_ADMIN_LOGIN_TOKEN: ${OPERANT_ADMIN_LOGIN_TOKEN:?set OPERANT_ADMIN_LOGIN_TOKEN in .env}
+      OPERANT_HOST: 0.0.0.0
+      OPERANT_PORT: 8080
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-http://openclaw-gateway:18789}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?set OPENCLAW_GATEWAY_TOKEN in .env}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1"
+      OPENCLAW_CONFIG_PATH: /operant/openclaw/openclaw.json
+      OPERANT_OPENCLAW_SANDBOX_MODE: ${OPERANT_OPENCLAW_SANDBOX_MODE:-off}
+      OPENCLAW_STATE_DIR: /home/node/.openclaw-client
+      OPENCLAW_OBSERVATION_STATE_DIR: /home/node/.openclaw-gateway-state
+      OPENCLAW_SECRET_RESOLVER_COMMAND: /operant/openclaw/operant-secret-resolver
+      OPENCLAW_SECRET_RESOLVER_SCRIPT: /operant/openclaw/operant-secret-resolver.mjs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - operant-openclaw-config:/operant/openclaw
+      - operant-openclaw-state:/home/node/.openclaw-gateway-state
+      - ./deploy/openclaw/operant-secret-resolver.mjs:/operant/openclaw/operant-secret-resolver.mjs:ro
+    ports:
+      - "${OPERANT_HTTP_BIND:-127.0.0.1}:${OPERANT_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  openclaw-gateway:
+    image: ghcr.io/tomascupr/operant/openclaw-gateway:${OPERANT_VERSION:-latest}
+    pull_policy: missing
+    environment:
+      OPENCLAW_CONFIG_PATH: /operant/openclaw/openclaw.json
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?set OPENCLAW_GATEWAY_TOKEN in .env}
+      OPERANT_CONTROL_PLANE_URL: http://policy-audit:8080
+      OPERANT_INTERNAL_TOKEN: ${OPERANT_INTERNAL_TOKEN:?set OPERANT_INTERNAL_TOKEN in .env}
+    depends_on:
+      policy-audit:
+        condition: service_healthy
+    volumes:
+      - operant-openclaw-state:/home/node/.openclaw
+      - operant-openclaw-config:/operant/openclaw:ro
+      - ./deploy/openclaw/operant-secret-resolver.mjs:/operant/openclaw/operant-secret-resolver.mjs:ro
+    ports:
+      - "${OPENCLAW_GATEWAY_HOST_BIND:-127.0.0.1}:${OPENCLAW_GATEWAY_HOST_PORT:-18789}:18789"
+      - "${MSTEAMS_WEBHOOK_HOST_BIND:-127.0.0.1}:${MSTEAMS_WEBHOOK_HOST_PORT:-3978}:3978"
+    command:
+      - sh
+      - -lc
+      - |
+        mkdir -p /home/node/.openclaw/agents/main/sessions
+        chmod 700 /home/node/.openclaw
+        operant-ensure-channel-plugins
+        exec openclaw gateway run --allow-unconfigured --port 18789 --bind lan --auth token
+
+volumes:
+  operant-postgres:
+  operant-openclaw-state:
+  operant-openclaw-config:

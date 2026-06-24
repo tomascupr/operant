@@ -20,6 +20,9 @@ FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOME=/home/node
+# Bind all interfaces inside the container so `docker run -p 8080:8080` works
+# out of the box. Host exposure is still controlled by the published port.
+ENV OPERANT_HOST=0.0.0.0
 ARG OPENCLAW_VERSION=2026.5.18
 RUN corepack enable
 RUN apk add --no-cache libstdc++ \

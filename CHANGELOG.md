@@ -3,6 +3,19 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.6.0] - 2026-06-24
+
+### Added
+- official multi-arch container images and one-command installer (8a9b441)
+
+
+### Documentation
+- document container images, one-command install, and release publishing (347e96c)
+
+
+### Fixed
+- point Helm and deploy checks at the published control-plane image (27a01a8)
+
 ## [0.5.3] - 2026-06-24
 
 ### Documentation

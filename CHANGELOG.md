@@ -3,6 +3,15 @@
 All notable changes to Operant are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.3] - 2026-06-24
+
+### Documentation
+- position Operant as the self-hosted alternative to Claude Tag (5bbfcc1)
+
+
+### Fixed
+- close approval, RBAC, rate-limit, redaction, and retention-wipe gaps (8f92835)
+
 ## [0.5.2] - 2026-05-31
 
 ### Documentation

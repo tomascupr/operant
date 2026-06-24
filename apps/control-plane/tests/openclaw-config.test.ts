@@ -191,6 +191,17 @@ test("generates Slack Socket Mode config with SecretRefs, policy, and safe gatew
   assert.equal(JSON.stringify(config).includes("xapp-"), false);
 });
 
+test("deny beats allow: a tool both allowed and denied unscoped lands only in deny", () => {
+  const config = generateOpenClawConfig(baseInput({
+    toolPolicies: [
+      { tool: "filesystem", action: "write", effect: "allow" },
+      { tool: "filesystem", action: "write", effect: "deny" },
+    ],
+  })) as any;
+  assert.equal(config.tools.deny.includes("filesystem:write"), true);
+  assert.equal(config.tools.alsoAllow.includes("filesystem:write"), false);
+});
+
 test("opts into Docker sandboxing only for the dedicated sandbox overlay", () => {
   const config = generateOpenClawConfig(baseInput({ sandboxMode: "docker" })) as any;
 

@@ -455,10 +455,19 @@ export function runOpenClawCommand(args: string[], params: {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    // SIGTERM first, then escalate to SIGKILL if the child ignores it, so a
+    // wedged CLI cannot leave this Promise (and the awaiting request) hung
+    // forever. SIGKILL cannot be trapped, so `close` is guaranteed to fire.
+    let killTimer: NodeJS.Timeout | undefined;
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
     }, timeoutMs);
+    const clearTimers = () => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+    };
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -467,7 +476,7 @@ export function runOpenClawCommand(args: string[], params: {
       stderr += chunk.toString();
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
+      clearTimers();
       resolve({
         command,
         exitCode: 127,
@@ -478,7 +487,7 @@ export function runOpenClawCommand(args: string[], params: {
       });
     });
     child.on("close", (exitCode) => {
-      clearTimeout(timeout);
+      clearTimers();
       // Parse JSON from the raw stdout, then scrub the string fields. The gateway token
       // can leak into stdout/stderr on failure, so the runner owns redaction for every
       // caller; json stays the parsed structured data (no consumer re-parses the string).

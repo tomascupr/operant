@@ -1,6 +1,10 @@
 const REDACTED = "[REDACTED]";
 
-const secretLikePattern = /\b(?:xox[a-z]-[A-Za-z0-9-]+|xapp-[A-Za-z0-9-]+|sk-[A-Za-z0-9_-]+|gh[opusr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|ctok_[A-Za-z0-9_-]+|tok_[A-Za-z0-9_-]+)\b/g;
+// Distinctive prefixes are matched without a leading boundary so a token glued
+// to a preceding word character (e.g. "BOTxoxb-...") is still redacted. "sk-"
+// keeps a left boundary because it occurs inside common hyphenated words
+// ("task-force", "disk-usage") and would otherwise over-redact them.
+const secretLikePattern = /(?:xox[a-z]-[A-Za-z0-9-]+|xapp-[A-Za-z0-9-]+|\bsk-[A-Za-z0-9_-]+|gh[opusr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|ctok_[A-Za-z0-9_-]+|tok_[A-Za-z0-9_-]+)\b/g;
 const pipedreamConnectLinkPattern = /https?:\/\/pipedream\.com\/_static\/connect\.html\?[^\s"']+/g;
 
 function isSensitiveKey(key: string): boolean {
@@ -12,7 +16,13 @@ function isSensitiveKey(key: string): boolean {
     || normalized.includes("secret")
     || normalized.includes("authorization")
     || normalized.includes("cookie")
-    || normalized.includes("credential");
+    || normalized.includes("credential")
+    || normalized.includes("privatekey")
+    || normalized.includes("passphrase")
+    || normalized.includes("bearer")
+    || normalized.includes("signingkey")
+    || normalized.includes("encryptionkey")
+    || normalized.includes("sessionkey");
 }
 
 export function redactForPersistence(value: unknown): unknown {

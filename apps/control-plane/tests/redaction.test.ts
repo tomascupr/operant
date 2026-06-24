@@ -65,3 +65,33 @@ test("redacts set-cookie and plural credentials keys, not just exact matches", (
   assert.equal(redacted.cookies, "[REDACTED]");
   assert.equal(redacted.credentials, "[REDACTED]");
 });
+
+test("redacts private-key, passphrase, bearer, and signing/encryption/session key fields", () => {
+  const redacted = redactRecordForPersistence({
+    privateKey: "-----BEGIN RSA PRIVATE KEY-----abc-----END RSA PRIVATE KEY-----",
+    passphrase: "correct horse battery staple",
+    bearer: "raw-bearer-value-without-a-known-prefix",
+    signingKey: "hs256-signing-material",
+    encryption_key: "aes-256-key-material",
+    sessionKey: "session-key-material",
+  }) as Record<string, unknown>;
+  assert.equal(redacted.privateKey, "[REDACTED]");
+  assert.equal(redacted.passphrase, "[REDACTED]");
+  assert.equal(redacted.bearer, "[REDACTED]");
+  assert.equal(redacted.signingKey, "[REDACTED]");
+  assert.equal(redacted.encryption_key, "[REDACTED]");
+  assert.equal(redacted.sessionKey, "[REDACTED]");
+});
+
+test("redacts tokens glued to a preceding word character without mangling hyphenated words", () => {
+  const redacted = redactRecordForPersistence({
+    glued: "BOTxoxb-secret-token-value",
+    ghGlued: "userghp_classicPATsecretvalue1234567890",
+    safe: "task-force disk-usage ask-me",
+  }) as Record<string, unknown>;
+  const serialized = JSON.stringify(redacted);
+  assert.equal(serialized.includes("xoxb-secret-token-value"), false);
+  assert.equal(serialized.includes("ghp_classicPATsecret"), false);
+  // "sk-" keeps a left word boundary, so common hyphenated words stay intact.
+  assert.equal(redacted.safe, "task-force disk-usage ask-me");
+});

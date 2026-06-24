@@ -484,6 +484,20 @@ function adminLoginTokenValidation(req: IncomingMessage, payload: unknown): { ok
   return { ok: true };
 }
 
+// Validates the admin login token while keeping the per-IP brute-force counter
+// in sync: records a failure on a wrong (401) token and clears it on success.
+// handleAuthLogin manages the counter itself because it defers the reset past
+// its no-role-assignment branches.
+function validateAdminLoginTokenThrottled(req: IncomingMessage, payload: unknown, ip: string): { ok: true } | { ok: false; statusCode: number; error: string } {
+  const result = adminLoginTokenValidation(req, payload);
+  if (!result.ok) {
+    if (result.statusCode === 401) authRateLimit.recordFailure(ip);
+  } else {
+    authRateLimit.reset(ip);
+  }
+  return result;
+}
+
 function decodePathComponent(value: string): string | null {
   try {
     return decodeURIComponent(value);
@@ -544,7 +558,7 @@ async function hasRoleAssignments(pool: Database, workspaceId: string): Promise<
   return Boolean(result.rowCount);
 }
 
-async function userHasPermission(pool: Database, userId: string, workspaceId: string, requested: { action: string; resource: string }): Promise<boolean> {
+async function getUserPermissions(pool: Database, userId: string, workspaceId: string): Promise<Array<{ action: string; resource: string }>> {
   const result = await pool.query(
     `SELECT p.action, p.resource
      FROM role_assignments ra
@@ -553,7 +567,12 @@ async function userHasPermission(pool: Database, userId: string, workspaceId: st
      WHERE ra.user_id = $1 AND (ra.workspace_id = $2 OR ra.workspace_id IS NULL)`,
     [userId, workspaceId],
   );
-  return result.rows.some((permission) => permissionMatches(permission, requested));
+  return result.rows;
+}
+
+async function userHasPermission(pool: Database, userId: string, workspaceId: string, requested: { action: string; resource: string }): Promise<boolean> {
+  const granted = await getUserPermissions(pool, userId, workspaceId);
+  return granted.some((permission) => permissionMatches(permission, requested));
 }
 
 async function loadSlackUserRoleNames(pool: Queryable, companyId: string, workspaceId: string, slackUserId: string): Promise<string[]> {
@@ -963,9 +982,19 @@ async function generateAndPersistOpenClawConfig(pool: Queryable, workspaceId: st
   return { config, checksum, configPath };
 }
 
-async function handleBootstrap({ req, res, state }: RouteContext): Promise<void> {
+async function handleBootstrap(context: RouteContext): Promise<void> {
+  const { req, res, state } = context;
+  // In-memory throttle only: the admin-token gate must run before any DB access
+  // (the no-DB bootstrap test enforces this), and at first bootstrap there is no
+  // workspace yet to attribute a rate-limit audit row to.
+  const ip = clientIp(req);
+  const limited = authRateLimit.isLimited(ip);
+  if (limited.limited) {
+    sendJson(res, 429, { error: "Too many failed attempts. Try again later." }, { "retry-after": String(limited.retryAfterSeconds) });
+    return;
+  }
   const rawBody = await readJson(req);
-  const adminToken = adminLoginTokenValidation(req, rawBody);
+  const adminToken = validateAdminLoginTokenThrottled(req, rawBody, ip);
   if (!adminToken.ok) {
     sendJson(res, adminToken.statusCode, { error: adminToken.error });
     return;
@@ -1283,7 +1312,13 @@ async function handleCredentials(context: RouteContext): Promise<void> {
   const workspace = await getWorkspace(state.pool);
   const roleAssignmentsExist = await hasRoleAssignments(state.pool, workspace.id);
   if (!roleAssignmentsExist) {
-    const adminToken = adminLoginTokenValidation(req, rawBody);
+    const ip = clientIp(req);
+    if (await enforceAuthRateLimit(context, workspace, ip, {
+      eventType: "credentials.bootstrap_rate_limited",
+      resourceType: "workspace",
+      error: "Too many failed attempts. Try again later.",
+    })) return;
+    const adminToken = validateAdminLoginTokenThrottled(req, rawBody, ip);
     if (!adminToken.ok) {
       await audit(state.pool, {
         companyId: workspace.company_id,
@@ -2484,6 +2519,22 @@ async function handleUpsertRole(context: RouteContext): Promise<void> {
   const permissions = Array.from(
     new Map(input.permissions.map((permission) => [`${permission.action}\0${permission.resource}`, permission])).values(),
   );
+
+  // An actor may only grant permissions it already holds. Without this, any
+  // users:write holder (e.g. the built-in admin) could mint a "*"/"*" custom
+  // role and assign it to itself, escalating to owner-equivalent access. Fetch
+  // the actor's permission set once and match in memory rather than per grant.
+  if (!allowed.actorUserId) {
+    sendJson(res, 403, { error: "Cannot grant a permission you do not hold" });
+    return;
+  }
+  const actorPermissions = await getUserPermissions(state.pool, allowed.actorUserId, workspace.id);
+  for (const permission of permissions) {
+    if (!actorPermissions.some((granted) => permissionMatches(granted, permission))) {
+      sendJson(res, 403, { error: "Cannot grant a permission you do not hold", permission });
+      return;
+    }
+  }
 
   const client = await state.pool.connect();
   try {
@@ -4017,7 +4068,7 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
   try {
     await client.query("BEGIN");
     const pending = await client.query(
-      `SELECT payload
+      `SELECT payload, requested_by_user_id
        FROM approvals
        WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
        LIMIT 1
@@ -4027,6 +4078,23 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
     if (!pending.rowCount) {
       await client.query("COMMIT");
       sendJson(res, 404, { error: "Pending approval not found" });
+      return;
+    }
+    // Separation of duties: the requester of a risky action cannot approve their
+    // own request. Self-denial is allowed — it is just the requester cancelling.
+    if (body.status === "approved" && pending.rows[0].requested_by_user_id === allowed.actorUserId) {
+      await audit(client, {
+        companyId: workspace.company_id,
+        workspaceId: workspace.id,
+        actorUserId: allowed.actorUserId,
+        eventType: "approval.decision_denied",
+        resourceType: "approval",
+        resourceId: id,
+        outcome: "deny",
+        metadata: { reason: "self_approval" },
+      });
+      await client.query("COMMIT");
+      sendJson(res, 403, { error: "You cannot approve your own request" });
       return;
     }
     const approvalRequirement = pending.rows[0]?.payload?.operantApproval ?? {};
@@ -4184,9 +4252,10 @@ async function handleApprovalDecision(context: RouteContext): Promise<void> {
       });
     }
     await client.query("COMMIT");
+    const decisionStatus = approvalsReceived >= minApprovals ? "approved" : "pending";
     sendJson(res, 200, {
       ...result.rows[0],
-      approvalDecision: { status: "approved", approvalsReceived, minApprovals },
+      approvalDecision: { status: decisionStatus, approvalsReceived, minApprovals },
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});

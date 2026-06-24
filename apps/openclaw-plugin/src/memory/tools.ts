@@ -1,6 +1,6 @@
 import { jsonResult } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
-import type { OperantClient } from "../operant-client.js";
+import { OperantClientError, type OperantClient } from "../operant-client.js";
 
 export interface MemoryToolDependencies {
   operantClient: OperantClient;
@@ -21,6 +21,17 @@ function stringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const items = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
   return items.length > 0 ? items : undefined;
+}
+
+// A 4xx from the control plane means the agent sent invalid input (a malformed
+// tag, over-length content/query, too many tags). Surface that distinctly so the
+// model corrects the call instead of retrying it as a transient outage; reserve
+// the *_unavailable code for network/timeout/5xx failures.
+function toToolError(error: unknown, unavailable: string): { error: string; status?: number; message: string } {
+  if (error instanceof OperantClientError && error.status >= 400 && error.status < 500) {
+    return { error: "invalid_input", status: error.status, message: error.message };
+  }
+  return { error: unavailable, message: error instanceof Error ? error.message : "unknown error" };
 }
 
 const WriteParameters = Type.Object(
@@ -70,7 +81,7 @@ export function createMemoryWriteTool(deps: MemoryToolDependencies) {
         visibility,
         scopeKey,
         tags: stringArray(params.tags),
-      }).catch((error) => ({ error: "memory_unavailable", message: error instanceof Error ? error.message : "unknown error" }));
+      }).catch((error) => toToolError(error, "memory_unavailable"));
       return jsonResult(result);
     },
   };
@@ -91,7 +102,7 @@ export function createMemorySearchTool(deps: MemoryToolDependencies) {
         q,
         tags: stringArray(params.tags),
         limit: clampLimit(params.limit, 10),
-      }).catch((error) => ({ error: "memory_unavailable", message: error instanceof Error ? error.message : "unknown error" }));
+      }).catch((error) => toToolError(error, "memory_unavailable"));
       return jsonResult(result);
     },
   };
@@ -112,7 +123,7 @@ export function createSkillsSearchTool(deps: MemoryToolDependencies) {
         q,
         tags: stringArray(params.tags),
         limit: clampLimit(params.limit, 10),
-      }).catch((error) => ({ error: "skills_unavailable", message: error instanceof Error ? error.message : "unknown error" }));
+      }).catch((error) => toToolError(error, "skills_unavailable"));
       return jsonResult(result);
     },
   };

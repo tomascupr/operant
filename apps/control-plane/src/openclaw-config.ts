@@ -131,6 +131,10 @@ function compileToolExposure(toolPolicies: OpenClawConfigInput["toolPolicies"]) 
     if (policy.effect === "allow") alsoAllow.add(name);
     if (policy.effect === "deny") deny.add(name);
   }
+  // Operant's contract is "deny beats allow"; enforce it before serializing so a
+  // tool never appears in both lists and the security decision can't hinge on
+  // OpenClaw's (to Operant, undocumented) merge order.
+  for (const name of deny) alsoAllow.delete(name);
   return {
     alsoAllow: Array.from(alsoAllow).sort(),
     deny: Array.from(deny).sort(),

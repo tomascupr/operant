@@ -27,6 +27,9 @@ export const retentionExportQueries = {
   jobs: "SELECT id, session_id, openclaw_run_id, status, started_at, finished_at, metadata, created_at FROM jobs WHERE workspace_id = $1 ORDER BY created_at",
   usageEvents: "SELECT id, session_id, job_id, provider, model, input_tokens, output_tokens, tool_name, estimated_cost_usd, metadata, created_at FROM usage_events WHERE workspace_id = $1 ORDER BY created_at",
   openclawConfigs: "SELECT id, config, config_path, checksum, generated_at FROM openclaw_configs WHERE workspace_id = $1 ORDER BY generated_at",
+  memoryEntries: "SELECT id, owner_principal_id, owner_platform, visibility, scope_key, tags, content, created_at, updated_at FROM memory_entries WHERE workspace_id = $1 ORDER BY created_at",
+  skillDefinitions: "SELECT id, name, trigger_hint, body, owner_principal_id, owner_platform, tags, created_at, updated_at FROM skill_definitions WHERE workspace_id = $1 ORDER BY created_at",
+  scheduledWorkflows: "SELECT id, owner_principal_id, owner_platform, name, description, schedule_kind, schedule_expression, timezone, target_channel, message, tools, enabled, openclaw_cron_id, materialization_status, created_at, updated_at FROM scheduled_workflows WHERE workspace_id = $1 ORDER BY created_at",
 } as const;
 
 export function buildWipeStatements(scope: RetentionWipeScope): WipeStatement[] {
@@ -64,6 +67,9 @@ export function buildWipeStatements(scope: RetentionWipeScope): WipeStatement[] 
         { label: "policyRules", sql: "DELETE FROM policy_rules WHERE workspace_id = $1" },
         { label: "toolPolicies", sql: "DELETE FROM tool_policies WHERE workspace_id = $1" },
         { label: "approvalPolicies", sql: "DELETE FROM approval_policies WHERE workspace_id = $1" },
+        { label: "memoryEntries", sql: "DELETE FROM memory_entries WHERE workspace_id = $1" },
+        { label: "skillDefinitions", sql: "DELETE FROM skill_definitions WHERE workspace_id = $1" },
+        { label: "scheduledWorkflows", sql: "DELETE FROM scheduled_workflows WHERE workspace_id = $1" },
         { label: "credentials", sql: "DELETE FROM integration_credentials WHERE workspace_id = $1" },
       ];
   }

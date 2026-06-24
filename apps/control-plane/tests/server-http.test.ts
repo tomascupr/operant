@@ -645,8 +645,8 @@ test("a dual-linked approver's decision attributes to the Teams principal when t
     }
     if (/UPDATE admin_sessions SET last_seen_at/.test(sql)) return result();
     if (/FROM role_assignments ra\s+JOIN role_permissions/.test(sql)) return result([{ action: "*", resource: "*" }]);
-    if (/SELECT payload\s+FROM approvals/.test(sql)) {
-      return result([{ payload: { operantApproval: { approverSlackUserIds: ["UOWNER"], approverTeamsUserIds: [teamsOwnerAadId], minApprovals: 1 } } }]);
+    if (/SELECT payload, requested_by_user_id\s+FROM approvals/.test(sql)) {
+      return result([{ requested_by_user_id: "req", payload: { operantApproval: { approverSlackUserIds: ["UOWNER"], approverTeamsUserIds: [teamsOwnerAadId], minApprovals: 1 } } }]);
     }
     if (/SELECT status\s+FROM approval_decisions/.test(sql)) return result();
     if (/INSERT INTO approval_decisions/.test(sql)) return result();
@@ -674,5 +674,107 @@ test("a dual-linked approver's decision attributes to the Teams principal when t
     const metadata = approvedAudit![9] as Record<string, unknown>;
     // The active session is Teams, so the attributed principal is the Teams tag.
     assert.equal(metadata.actorPrincipal, `msteams:${teamsOwnerAadId}`);
+  });
+});
+
+test("an approver cannot approve their own request (separation of duties)", async () => {
+  const approvalId = "66666666-6666-4666-8666-666666666666";
+  const { pool } = createFakePool((sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result();
+    const seeded = existingWorkspaceSeedQueries(sql, params);
+    if (seeded) return seeded;
+    const workspace = workspaceJoinQuery(sql);
+    if (workspace) return workspace;
+    if (/SELECT 1 FROM role_assignments/.test(sql)) return result([{ exists: true }]);
+    if (/FROM admin_sessions s/.test(sql)) {
+      return result([{ user_id: "user-owner", slack_user_id: "UOWNER", teams_aad_user_id: null, principal_platform: "slack", roles: ["owner"] }]);
+    }
+    if (/UPDATE admin_sessions SET last_seen_at/.test(sql)) return result();
+    if (/FROM role_assignments ra\s+JOIN role_permissions/.test(sql)) return result([{ action: "*", resource: "*" }]);
+    if (/SELECT payload, requested_by_user_id\s+FROM approvals/.test(sql)) {
+      // The requester is the same user making the decision.
+      return result([{ requested_by_user_id: "user-owner", payload: { operantApproval: { approverSlackUserIds: ["UOWNER"], minApprovals: 1 } } }]);
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) return result();
+    throw new Error(`Unexpected database query: ${sql}`);
+  });
+
+  await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+    const response = await requestJson(baseUrl, `/api/approvals/${approvalId}/decision`, {
+      method: "POST",
+      headers: { authorization: "Bearer session-token" },
+      body: JSON.stringify({ status: "approved" }),
+    });
+    assert.equal(response.response.status, 403);
+    assert.match(String(response.body.error), /your own request/i);
+  });
+});
+
+test("an approval below its threshold reports pending, not approved", async () => {
+  const approvalId = "77777777-7777-4777-8777-777777777777";
+  const { pool } = createFakePool((sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result();
+    const seeded = existingWorkspaceSeedQueries(sql, params);
+    if (seeded) return seeded;
+    const workspace = workspaceJoinQuery(sql);
+    if (workspace) return workspace;
+    if (/SELECT 1 FROM role_assignments/.test(sql)) return result([{ exists: true }]);
+    if (/FROM admin_sessions s/.test(sql)) {
+      return result([{ user_id: "user-owner", slack_user_id: "UOWNER", teams_aad_user_id: null, principal_platform: "slack", roles: ["owner"] }]);
+    }
+    if (/UPDATE admin_sessions SET last_seen_at/.test(sql)) return result();
+    if (/FROM role_assignments ra\s+JOIN role_permissions/.test(sql)) return result([{ action: "*", resource: "*" }]);
+    if (/SELECT payload, requested_by_user_id\s+FROM approvals/.test(sql)) {
+      return result([{ requested_by_user_id: "req", payload: { operantApproval: { approverSlackUserIds: ["UOWNER", "USECOND"], minApprovals: 2 } } }]);
+    }
+    if (/SELECT status\s+FROM approval_decisions/.test(sql)) return result();
+    if (/INSERT INTO approval_decisions/.test(sql)) return result();
+    if (/count\(DISTINCT decided_by_user_id\)/.test(sql)) return result([{ approvals_received: 1 }]);
+    if (/SELECT id, workspace_id, requested_by_user_id[\s\S]*FROM approvals/.test(sql)) {
+      return result([{ id: approvalId, workspace_id: workspaceId, requested_by_user_id: "req", status: "pending", action: "exec:run", resource: "shell", payload: {}, decided_by_user_id: null, decided_at: null, created_at: new Date() }]);
+    }
+    if (/INSERT INTO audit_logs/.test(sql)) return result();
+    throw new Error(`Unexpected database query: ${sql}`);
+  });
+
+  await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+    const response = await requestJson(baseUrl, `/api/approvals/${approvalId}/decision`, {
+      method: "POST",
+      headers: { authorization: "Bearer session-token" },
+      body: JSON.stringify({ status: "approved" }),
+    });
+    assert.equal(response.response.status, 200);
+    const decision = response.body.approvalDecision as Record<string, unknown>;
+    assert.equal(decision.status, "pending");
+    assert.equal(decision.approvalsReceived, 1);
+    assert.equal(decision.minApprovals, 2);
+  });
+});
+
+test("custom-role upsert cannot grant a permission the actor does not hold", async () => {
+  const { pool } = createFakePool((sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result();
+    const seeded = existingWorkspaceSeedQueries(sql, params);
+    if (seeded) return seeded;
+    const workspace = workspaceJoinQuery(sql);
+    if (workspace) return workspace;
+    if (/SELECT 1 FROM role_assignments/.test(sql)) return result([{ exists: true }]);
+    if (/FROM admin_sessions s/.test(sql)) {
+      return result([{ user_id: "user-admin", slack_user_id: "UADMIN", teams_aad_user_id: null, principal_platform: "slack", roles: ["admin"] }]);
+    }
+    if (/UPDATE admin_sessions SET last_seen_at/.test(sql)) return result();
+    // The actor holds users:write (so the RBAC gate passes) but NOT "*"/"*".
+    if (/FROM role_assignments ra\s+JOIN role_permissions/.test(sql)) return result([{ action: "users:write", resource: "user" }]);
+    throw new Error(`Unexpected database query: ${sql}`);
+  });
+
+  await withServer({ pool, masterKey: Buffer.alloc(32) }, async (baseUrl) => {
+    const response = await requestJson(baseUrl, "/api/roles", {
+      method: "POST",
+      headers: { authorization: "Bearer session-token" },
+      body: JSON.stringify({ name: "superadmin", permissions: [{ action: "*", resource: "*" }] }),
+    });
+    assert.equal(response.response.status, 403);
+    assert.match(String(response.body.error), /do not hold/i);
   });
 });

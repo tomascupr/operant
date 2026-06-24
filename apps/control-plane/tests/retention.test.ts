@@ -63,6 +63,17 @@ test("workspace wipe removes operational state but keeps workspace identity tabl
   );
 });
 
+test("workspace wipe and export cover user-content tables (memory, skills, scheduled workflows)", () => {
+  const wipeLabels = buildWipeStatements("workspace").map((statement) => statement.label);
+  for (const label of ["memoryEntries", "skillDefinitions", "scheduledWorkflows"]) {
+    assert.ok(wipeLabels.includes(label), `workspace wipe must delete ${label}`);
+  }
+  for (const key of ["memoryEntries", "skillDefinitions", "scheduledWorkflows"] as const) {
+    assert.ok(key in retentionExportQueries, `export must include ${key}`);
+    assert.match(retentionExportQueries[key], /WHERE workspace_id = \$1/);
+  }
+});
+
 test("retention purge targets operational time-series records only", () => {
   const labels = buildRetentionPurgeStatements().map((statement) => statement.label);
   assert.deepEqual(labels, ["usageEvents", "usageEventsLinkedToExpiredSessions", "jobsLinkedToExpiredSessions", "jobs", "sessions", "approvals", "auditLogs"]);

@@ -123,7 +123,7 @@ const checks = [
     file: "deploy/helm/operant/values.yaml",
     patterns: [
       ["replica count fixed to one", /replicaCount:\s*1/],
-      ["control-plane image values", /controlPlane:[\s\S]*repository:\s*ghcr\.io\/operant\/control-plane/],
+      ["control-plane image values", /controlPlane:[\s\S]*repository:\s*ghcr\.io\/tomascupr\/operant\/control-plane/],
       ["OpenClaw image values", /openclaw:[\s\S]*repository:\s*ghcr\.io\/openclaw\/openclaw/],
       ["OpenClaw service disabled by default", /openclaw:[\s\S]*service:[\s\S]*enabled:\s*false[\s\S]*publicPort:\s*18789/],
       ["storage values", /openclawStateSize:\s*20Gi[\s\S]*openclawConfigSize:\s*1Gi/],

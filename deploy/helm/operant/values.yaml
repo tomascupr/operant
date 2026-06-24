@@ -6,8 +6,8 @@ imagePullPolicy: IfNotPresent
 
 controlPlane:
   image:
-    repository: ghcr.io/operant/control-plane
-    tag: "0.1.0"
+    repository: ghcr.io/tomascupr/operant/control-plane
+    tag: "0.6.0"
   port: 8080
   publicPort: 80
   resources: {}

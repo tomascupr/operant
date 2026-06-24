@@ -4,6 +4,24 @@ This guide keeps operational setup out of the project README. Use it to run a
 single self-hosted Operant trust boundary, configure Slack/OpenClaw, and
 optionally produce strict live evidence for customer acceptance packages.
 
+## Fastest path: one command
+
+For a disposable evaluation stack with no checkout, the installer pulls the
+official GHCR images, generates a `.env` of fresh random secrets, and starts
+Postgres + the control plane + the OpenClaw gateway:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tomascupr/operant/v0.6.0/install.sh | bash
+```
+
+Everything lands in an `operant/` directory; the script prints the dashboard URL
+and admin login token when it finishes. Manage it with `docker compose` from
+that directory (`docker compose down`; `docker compose pull && docker compose up
+-d` to upgrade). Useful knobs: `OPERANT_DIR`, `OPERANT_HTTP_PORT`,
+`OPERANT_VERSION`, and `OPERANT_NO_START=1` (stage files without starting). Use
+the from-source path below when you need the sandbox overlay or the
+live-acceptance tooling.
+
 ## Local Stack
 
 ```bash

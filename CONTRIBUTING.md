@@ -85,13 +85,30 @@ the changelog will categorize automatically. Otherwise commits land under
 
 ## Releasing (maintainers)
 
+First bump the version everywhere it is pinned:
+
+- `package.json`, `apps/control-plane/package.json`, `apps/openclaw-plugin/package.json`
+- `install.sh` (`OPERANT_VERSION` and `OPERANT_REF` defaults)
+- `deploy/helm/operant/values.yaml` (`controlPlane.image.tag`) and
+  `deploy/helm/operant/Chart.yaml` (`version` + `appVersion`)
+- the pinned `vX.Y.Z` install URL in `README.md`, `docs/setup.md`, and the
+  `docker-compose.quickstart.yml` header comment
+
+Then cut the release:
+
 ```bash
 git cliff --tag vX.Y.Z --output CHANGELOG.md
-git commit -am "Release vX.Y.Z"
+git commit -am "chore(release): vX.Y.Z"
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push --follow-tags
 gh release create vX.Y.Z --notes-from-tag
 ```
+
+Pushing the tag triggers `.github/workflows/release.yml`, which builds and
+publishes the `control-plane` (multi-arch) and `openclaw-gateway` images to
+`ghcr.io/tomascupr/operant/*`. The first publish of each package is private —
+set it to Public once in the GitHub package settings so `docker pull` and the
+one-command installer work for everyone.
 
 ## Reporting issues
 

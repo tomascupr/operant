@@ -23,6 +23,19 @@ session, policy decision, and tool call names the person who triggered it.
 
 ## Quickstart
 
+**One command** — pulls the official images, generates fresh secrets, and boots
+the whole stack (Postgres + control plane + OpenClaw gateway):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tomascupr/operant/v0.6.0/install.sh | bash
+```
+
+It writes a self-contained `operant/` directory and prints your dashboard URL
+and admin login token when it finishes. Requires only Docker with the Compose
+v2 plugin — no checkout, no Node, no build.
+
+**From source** — for development, the sandbox overlay, and live acceptance:
+
 ```bash
 pnpm install
 pnpm init:env
@@ -42,10 +55,28 @@ Bot to the OpenClaw Teams channel with
 on its own, or run both side by side on one control plane. Full
 walkthrough in **[docs/setup.md](docs/setup.md)**.
 
-Requirements: Node 24+, pnpm 11+, Docker Compose v2.
+Requirements: Docker with the Compose v2 plugin. The from-source path also
+needs Node 24+ and pnpm 11+ (run `corepack enable` once — Node 24 ships with
+Corepack and uses the pnpm version pinned in `package.json`).
 
-Don't have pnpm 11 yet? Run `corepack enable` once; Node 24 ships
-with Corepack and uses the pnpm version pinned in `package.json`.
+### Container images
+
+Official images are published to GHCR on every release:
+
+| Image | Architectures |
+| --- | --- |
+| `ghcr.io/tomascupr/operant/control-plane` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/tomascupr/operant/openclaw-gateway` | `linux/amd64` |
+
+Tags track the release: `latest`, `0.6.0`, `0.6`. The control plane runs
+standalone against any Postgres — it migrates on boot:
+
+```bash
+docker run -p 8080:8080 \
+  -e DATABASE_URL=postgres://user:pass@host:5432/operant \
+  -e OPERANT_SECRET_KEY="$(openssl rand -base64 32)" \
+  ghcr.io/tomascupr/operant/control-plane:latest
+```
 
 ## How it works
 
